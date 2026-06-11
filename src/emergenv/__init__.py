@@ -1,6 +1,6 @@
 """EMERGENV - Encrypted, Merged Environment."""
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 
 class EmergenvError(Exception):
