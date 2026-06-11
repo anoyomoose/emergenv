@@ -1,0 +1,15 @@
+# Development environment for emergenv.
+#   python -m venv env && . env/bin/activate
+#   pip install -r requirements-dev.txt
+#
+# Installs emergenv itself (editable, with its test extra) plus all the tooling
+# that ./check.sh runs. flake8 is invoked as `pflake8` (pyproject-flake8) so its
+# config can live in pyproject.toml's [tool.flake8].
+-e .[test]
+
+black
+isort
+pyproject-flake8
+mypy
+pyright
+tox

@@ -1,0 +1,23 @@
+# Virtual environments
+env/
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Tooling caches
+.tox/
+.mypy_cache/
+.pytest_cache/
+
+# IDE
+.idea/
+
+# Claude
+docs/
+

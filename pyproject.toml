@@ -1,0 +1,91 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "emergenv"
+dynamic = ["version"]
+description = "Encrypted, Merged Environment"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Anoyomoose" }]
+keywords = ["env", "dotenv", "encryption", "age", "secrets"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python :: 3",
+    "Environment :: Console",
+    "Operating System :: POSIX",
+]
+
+[project.urls]
+Homepage = "https://github.com/anoyomoose/emergenv"
+Repository = "https://github.com/anoyomoose/emergenv"
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+emergenv = "emergenv.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "emergenv.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["emergenv*"]
+
+[tool.pyright]
+include = ["src", "tests"]
+extraPaths = ["src", "tests"]
+venvPath = "."
+venv = "env"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.black]
+target-version = ['py39']
+line-length = 88
+
+[tool.isort]
+# keep editor config in sync
+profile = 'black'
+line_length = 88
+known_first_party = ['emergenv']
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ['E203', 'E501', 'E701', 'E704', 'W291']
+per-file-ignores = ['*/__init__.py:F401']
+# E203: Whitespace before ':' - Prefer Black's formatting for slicing, E203 is not PEP8 compliant anyway
+# E501: Line too long - Prefer Black's formatting for long comments, string literals, etc
+# E701: Multiple statements on one line ':' - Prefer Black's single-line class allowance
+# E704: SAME as E701 but for def - Black puts e.g. empty abstract functions on a single line
+# W291: Trailing whitespace - Prefer Black's allowance for trailing whitespace in multi-line string constants
+# F401: Unused imports - disable for __init__.py files
+
+[tool.mypy]
+python_version = "3.9"
+# src/ layout: let mypy find the `emergenv` package and the tests' conftest.
+mypy_path = "src:tests"
+explicit_package_bases = true
+namespace_packages = true
+
+show_column_numbers = true
+show_error_codes = true
+
+follow_imports = "normal"
+ignore_missing_imports = true
+
+disallow_untyped_calls = true
+warn_return_any = true
+strict_optional = true
+warn_no_return = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+disallow_untyped_defs = true
+check_untyped_defs = true
+no_implicit_reexport = true
