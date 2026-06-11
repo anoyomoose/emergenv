@@ -674,7 +674,7 @@ a pre-commit hook). Colours are emitted only to a terminal, and suppressed when
 
 Deletes all `.env` files for which a `.age` file exists with the same contents.
 
-### build <target> [--profile <profile>[,<profile>[...]]] [--no-source] [--bare] [--no-local] [--output <filename>]
+### build <target> [--profile <profile>[,<profile>[...]]] [--no-source] [--bare] [--no-local] [--output <filename>] [--verbose]
 
 Builds `<target>` and writes the result to `<target>.env` in the working
 directory (which should not be committed). The base file (and its optional
@@ -722,6 +722,28 @@ writing: /home/user/myproject/.env
 
 When `--output -` is used these logs are dropped entirely so stdout carries only
 the built environment (errors still go to stderr).
+
+Pass `--verbose` (`-v`) to replace the terse `importing: <file>` lines with a full
+breakdown of every search path tried - both the `.age` and `.env` variant of each -
+colour-coded: green (using the encrypted file, or nothing there), orange (building from
+or leaving plaintext), red (a plaintext fragment that was never encrypted, plaintext
+that has drifted from its `.age`, or a cwd base shadowing one in `emergenv/`). The base
+file and `.local` are broken down the same way. It is informational only and never
+changes the exit code; like the other logs it is suppressed under `--output -`.
+
+```text
+target: dot
+  - missing: dot.emerg.env [cwd]
+  - using: emergenv/dot.emerg.age
+local: missing /home/user/myproject/dot.local.emerg.env
+importing: database
+  - using: database.age
+  - missing: database.env
+  - missing: dev/database.(age|env)
+  - using: dot/dev/database.age
+  - ignoring: dot/dev/database.env [age-preferred,match]
+writing: /home/user/myproject/.env
+```
 
 A `<target>` may be given with a `.emerg.(age|env)`, `.local.emerg.(age|env)`, or
 `.env` suffix (stripped for shell-completion convenience).

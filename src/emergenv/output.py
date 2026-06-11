@@ -16,6 +16,7 @@ output.LOG_OFF``.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -29,6 +30,18 @@ AGE_OFF = "off"
 
 log_mode = LOG_STDOUT
 age_mode = AGE_CAPTURE
+
+# Terminal colours. "orange" maps to ANSI yellow, the closest widely-supported
+# colour. Only emitted to an interactive stdout (and never when NO_COLOR is set).
+_ANSI = {"green": "32", "orange": "33", "red": "31"}
+
+
+def colourize(text: str, name: str) -> str:
+    """Wrap ``text`` in an ANSI colour; passes through unchanged if stdout is
+    not a tty or ``NO_COLOR`` is set."""
+    if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+        return text
+    return f"\033[{_ANSI[name]}m{text}\033[0m"
 
 
 def log(message: str) -> None:

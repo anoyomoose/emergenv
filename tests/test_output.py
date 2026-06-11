@@ -2,6 +2,8 @@
 age subprocess's stderr is handled. (age stdout is always captured - it's the
 data - so only stderr is routed.)"""
 
+from __future__ import annotations
+
 import subprocess
 from types import SimpleNamespace
 
@@ -10,7 +12,7 @@ from conftest import requires_age
 
 from emergenv import EmergenvError, crypto, output
 from emergenv.cli import error
-from emergenv.output import log
+from emergenv.output import colourize, log
 
 # --- log() / error() --------------------------------------------------------
 
@@ -103,3 +105,24 @@ def test_age_stderr_passthrough(
     with pytest.raises(EmergenvError):
         crypto.decrypt_bytes(ciphertext)
     assert capfd.readouterr().err != ""  # age wrote diagnostics straight to our stderr
+
+
+# --- colourize() ------------------------------------------------------------
+
+
+def test_no_colour_when_not_a_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    assert colourize("AGE", "green") == "AGE"
+
+
+def test_no_colour_when_no_color_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    assert colourize("AGE", "green") == "AGE"
+
+
+def test_colour_when_tty_and_no_no_color(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    assert colourize("AGE", "red") == "\033[31mAGE\033[0m"

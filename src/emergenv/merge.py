@@ -31,7 +31,7 @@ from pathlib import Path
 from . import EmergenvError
 from .crypto import decrypt_bytes
 from .expand import ExpansionError, expand
-from .output import log
+from .output import colourize, log
 from .paths import (
     AGE_SUFFIX,
     DATA_DIR_NAME,
@@ -48,6 +48,25 @@ class Line:
 
     text: str
     source: str
+
+
+@dataclass(frozen=True)
+class _Stem:
+    """One search location for a fragment, with both variant paths."""
+
+    rel: str  # path relative to emergenv/, posix, without suffix
+    age: Path
+    env: Path
+    age_exists: bool
+    env_exists: bool
+
+    @property
+    def chosen(self) -> Path | None:
+        if self.age_exists:
+            return self.age
+        if self.env_exists:
+            return self.env
+        return None
 
 
 # An assignment: optional leading whitespace, optional ``export ``, then KEY=.
@@ -184,12 +203,14 @@ class _Builder:
         mark_source: bool = True,
         bare: bool = False,
         local: bool = True,
+        verbose: bool = False,
     ):
         self.target = target
         self.profiles = profiles
         self.mark_source = mark_source
         self.bare = bare
         self.local = local
+        self.verbose = verbose
         self._resolve_cache: dict[str, list[Line]] = {}
         self._file_cache: dict[object, list[Line]] = {}
         self._stack: list[str] = []
@@ -202,21 +223,74 @@ class _Builder:
         # headers for blank-only sources).
         return _render(_last_wins(computed), self.mark_source, self.bare)
 
+    def _log_base_breakdown(self, cwd_env: Path, em_age: Path, em_env: Path) -> None:
+        log(f"target: {self.target}")
+        cwd, age, env = cwd_env.is_file(), em_age.is_file(), em_env.is_file()
+        if cwd and (age or env):  # accident: cwd shadows an emergenv/ base
+            log(
+                colourize(
+                    f"  - using: {self._source_label(cwd_env)} [ambiguous]", "red"
+                )
+            )
+            for path, exists in ((em_age, age), (em_env, env)):
+                if exists:
+                    log(
+                        colourize(
+                            f"  - ignoring: {self._source_label(path)} [ambiguous]",
+                            "red",
+                        )
+                    )
+                else:
+                    log(colourize(f"  - missing: {self._source_label(path)}", "green"))
+            return
+        if cwd:  # cwd base, no emergenv/ base
+            log(colourize(f"  - using: {self._source_label(cwd_env)} [cwd]", "green"))
+            log(
+                colourize(
+                    f"  - missing: {DATA_DIR_NAME}/{self.target}.emerg.(age|env)",
+                    "green",
+                )
+            )
+            return
+        # cwd missing: standard age/env table on the emergenv/ slot
+        log(colourize(f"  - missing: {self._source_label(cwd_env)} [cwd]", "green"))
+        rel = f"{DATA_DIR_NAME}/{self.target}.emerg"
+        em_stem = _Stem(rel, em_age, em_env, age, env)
+        for line in self._stem_lines(em_stem):
+            log(line)
+
     def _read_base(self) -> list[Line]:
+        cwd_env = working_dir() / f"{self.target}.emerg{ENV_SUFFIX}"
+        em_age = data_dir() / f"{self.target}.emerg{AGE_SUFFIX}"
+        em_env = data_dir() / f"{self.target}.emerg{ENV_SUFFIX}"
+
         base_path = self._find_base()
         if base_path is None:
             raise EmergenvError(
                 f"no base to build: neither {self.target}.emerg.env (here) nor "
                 f"{DATA_DIR_NAME}/{self.target}.emerg.(age|env)"
             )
-        log(f"target: {base_path}")
+        if self.verbose:
+            self._log_base_breakdown(cwd_env, em_age, em_env)
+        else:
+            log(f"target: {base_path}")
         lines = self._read_file(base_path)
 
         # The .local layer is plaintext-only and always relative to the cwd.
         local_path = working_dir() / f"{self.target}.local.emerg{ENV_SUFFIX}"
-        if self.local and local_path.is_file():
-            log(f"local: {local_path}")
+        if not self.local:
+            if self.verbose:
+                log(
+                    colourize(f"local: skipped {local_path.name} [--no-local]", "green")
+                )
+        elif local_path.is_file():
+            if self.verbose:
+                log(colourize(f"local: using {local_path}", "green"))
+            else:
+                log(f"local: {local_path}")
             lines = lines + self._read_file(local_path)
+        elif self.verbose:
+            log(colourize(f"local: missing {local_path}", "green"))
         return lines
 
     def _find_base(self) -> Path | None:
@@ -290,6 +364,46 @@ class _Builder:
                 out.append(Line(text, win.source))
         return out
 
+    def _stem_lines(self, stem: _Stem) -> list[str]:
+        """Colour-coded breakdown lines for one age/env location."""
+        if not stem.age_exists and not stem.env_exists:
+            return [colourize(f"  - missing: {stem.rel}.(age|env)", "green")]
+
+        age_path = f"{stem.rel}{AGE_SUFFIX}"
+        env_path = f"{stem.rel}{ENV_SUFFIX}"
+        lines: list[str] = []
+        if stem.age_exists and stem.env_exists:
+            try:
+                match = decrypt_bytes(stem.age.read_bytes()) == stem.env.read_bytes()
+            except EmergenvError:
+                return [
+                    colourize(f"  - using: {age_path} [undecryptable]", "red"),
+                    colourize(
+                        f"  - ignoring: {env_path} [age-preferred,undecryptable]", "red"
+                    ),
+                ]
+            lines.append(colourize(f"  - using: {age_path}", "green"))
+            tag = "match" if match else "mismatch"
+            match_colour = "orange" if match else "red"
+            lines.append(
+                colourize(
+                    f"  - ignoring: {env_path} [age-preferred,{tag}]", match_colour
+                )
+            )
+        elif stem.age_exists:  # env missing
+            lines.append(colourize(f"  - using: {age_path}", "green"))
+            lines.append(colourize(f"  - missing: {env_path}", "green"))
+        else:  # env exists, age missing
+            lines.append(colourize(f"  - missing: {age_path} [env-present]", "red"))
+            lines.append(colourize(f"  - using: {env_path} [age-missing]", "orange"))
+        return lines
+
+    def _log_fragment_breakdown(self, name: str, records: list[_Stem]) -> None:
+        log(f"importing: {name}")
+        for stem in records:
+            for line in self._stem_lines(stem):
+                log(line)
+
     def _resolve(self, name: str) -> list[Line]:
         if name in self._resolve_cache:
             return self._resolve_cache[name]
@@ -297,9 +411,18 @@ class _Builder:
             chain = " -> ".join([*self._stack, name])
             raise EmergenvError(f"include cycle: {chain}")
         self._stack.append(name)
+        records = self._search_records(name)
+        found = [r.chosen for r in records if r.chosen is not None]
+        # Print the breakdown before the no-match raise, so the user sees every
+        # path that was tried even when the fragment resolves to nothing.
+        if self.verbose:
+            self._log_fragment_breakdown(name, records)
+        if not found:
+            raise EmergenvError(f"@include {name!r} matched no file")
         block: list[Line] = []
-        for path in self._search(name):  # only files that exist are returned
-            log(f"importing: {path.relative_to(data_dir()).as_posix()}")
+        for path in found:
+            if not self.verbose:
+                log(f"importing: {path.relative_to(data_dir()).as_posix()}")
             block.extend(self._expand(self._read_file(path)))
         self._stack.pop()
         self._resolve_cache[name] = block
@@ -350,38 +473,39 @@ class _Builder:
             out.append(line)
         return out
 
-    def _search(self, name: str) -> list:
+    def _stem_bases(self, name: str) -> list[Path]:
         bang = name.startswith("!")
         core = name[1:] if bang else name
         validate_component(core, kind="fragment")
-
         base = data_dir()
         if bang:
-            stems = [base / core]
-        else:
-            stems = [base / core]
-            stems += [base / profile / core for profile in self.profiles]
-            stems.append(base / self.target / core)
-            stems += [base / self.target / profile / core for profile in self.profiles]
+            return [base / core]
+        stems = [base / core]
+        stems += [base / profile / core for profile in self.profiles]
+        stems.append(base / self.target / core)
+        stems += [base / self.target / profile / core for profile in self.profiles]
+        return stems
 
+    def _search_records(self, name: str) -> list[_Stem]:
+        base = data_dir()
         root = base.resolve()
-        found = []
-        for stem in stems:
+        records: list[_Stem] = []
+        for stem in self._stem_bases(name):
             age = stem.with_name(stem.name + AGE_SUFFIX)
             env = stem.with_name(stem.name + ENV_SUFFIX)
-            chosen = age if age.is_file() else env if env.is_file() else None
-            if chosen is None:
-                continue
-            # Symlinks are allowed, but must stay inside emergenv/.
-            if root not in chosen.resolve().parents:
-                raise EmergenvError(
-                    f"{name!r} resolves outside '{DATA_DIR_NAME}/' via {chosen}"
+            age_exists, env_exists = age.is_file(), env.is_file()
+            # Symlinks are allowed, but any existing variant must stay inside emergenv/.
+            for variant, exists in ((age, age_exists), (env, env_exists)):
+                if exists and root not in variant.resolve().parents:
+                    raise EmergenvError(
+                        f"{name!r} resolves outside '{DATA_DIR_NAME}/' via {variant}"
+                    )
+            records.append(
+                _Stem(
+                    stem.relative_to(base).as_posix(), age, env, age_exists, env_exists
                 )
-            found.append(chosen)
-
-        if not found:
-            raise EmergenvError(f"@include {name!r} matched no file")
-        return found
+            )
+        return records
 
 
 def build_target(
@@ -391,8 +515,14 @@ def build_target(
     mark_source: bool = True,
     bare: bool = False,
     local: bool = True,
+    verbose: bool = False,
 ) -> str:
     """Build ``<target>`` into the final ``.env`` text (see module docstring)."""
     return _Builder(
-        target, profiles, mark_source=mark_source, bare=bare, local=local
+        target,
+        profiles,
+        mark_source=mark_source,
+        bare=bare,
+        local=local,
+        verbose=verbose,
     ).build()

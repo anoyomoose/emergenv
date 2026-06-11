@@ -31,7 +31,7 @@ from .crypto import (
     inaccessible_authorized_keys,
 )
 from .merge import build_target
-from .output import log
+from .output import colourize, log
 from .paths import (
     AGE_SUFFIX,
     DATA_DIR_NAME,
@@ -68,17 +68,6 @@ SSH_PUBLIC_KEYS = ("id_ed25519.pub", "id_rsa.pub")
 def error(message: str) -> None:
     """Report an error to stderr. Always emitted; never silenced."""
     print(f"error: {message}", file=sys.stderr)
-
-
-# Terminal colours for `status`. "orange" maps to ANSI yellow, the closest
-# widely-supported colour. Only emitted to an interactive terminal.
-_ANSI = {"green": "32", "orange": "33", "red": "31"}
-
-
-def _colour(text: str, colour: str) -> str:
-    if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
-        return text
-    return f"\033[{_ANSI[colour]}m{text}\033[0m"
 
 
 def _collect_ssh_public_keys() -> list[str]:
@@ -387,7 +376,7 @@ def cmd_status(_args: argparse.Namespace) -> int:
     for pair in pairs:
         code, label, colour = _status_of(pair)
         worst = max(worst, code)
-        log(f"{pair['name']} {_colour(label, colour)}")
+        log(f"{pair['name']} {colourize(label, colour)}")
     return worst
 
 
@@ -434,6 +423,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         mark_source=not args.no_source,
         bare=args.bare,
         local=not args.no_local,
+        verbose=args.verbose,
     )
 
     if to_stdout:
@@ -563,6 +553,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         metavar="<filename>",
         help="write to this file instead of the default; '-' writes to stdout",
+    )
+    p_build.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="show every search path tried (both .age/.env), colour-coded",
     )
     p_build.set_defaults(func=cmd_build)
 
