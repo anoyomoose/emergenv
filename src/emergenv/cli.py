@@ -209,7 +209,8 @@ def cmd_edit(args: argparse.Namespace) -> int:
     if editor is None:
         if not args.wait:
             log("no usable editor found ($VISUAL/$EDITOR/editor/vi)")
-        input(f"edit {env} now, then press ENTER to re-encrypt...")
+        input(f"\nedit {env} now, then press ENTER to re-encrypt...")
+        print()
     else:
         log(f"opening {env} with {editor[0]}")
         subprocess.run([*editor, str(env)])
