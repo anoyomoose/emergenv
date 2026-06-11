@@ -64,7 +64,7 @@ and you don't want it.
   `${VAR}` substitution (defaults, slicing, search/replace, case) and `$(( ))` integer
   arithmetic, opt-in per line via `$`/`%`. Assemble a `DATABASE_URL` from its parts,
   derive a port offset. There's **no shell**, so a password containing `$(rm -rf)` is
-  data, never a command. (See [Expansion](#expansion) / [EXPANSION.md](EXPANSION.md).)
+  data, never a command. (See [Expansion](#expansion) / [EXPANSION.md](https://github.com/anoyomoose/emergenv/blob/main/EXPANSION.md).)
 - **It won't silently corrupt your secrets.** Every encryption is decrypted again in memory
   and verified against the original before anything is written.
 
@@ -501,7 +501,7 @@ DB_PORT=5432
 $DATABASE_URL=postgres://${DB_USER:-app}@${DB_HOST}:${DB_PORT}/${DB_NAME}
 ```
 
-See [EXPANSION.md](EXPANSION.md) for the complete, exact specification of every
+See [EXPANSION.md](https://github.com/anoyomoose/emergenv/blob/main/EXPANSION.md) for the complete, exact specification of every
 supported form (and how it deliberately differs from bash).
 
 ## Base file
