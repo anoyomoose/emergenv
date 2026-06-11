@@ -13,7 +13,7 @@ VPS, and homelab world, not cloud platforms with a managed secret store. The enc
 `.age` files live in the repo, just do a checkout, and `emergenv build` using the SSH
 host key the server already has. No KMS, no secret-injection pipeline, no separate key
 inventory - the secrets ride along in the repo and the box already holds the only key
-it needs.
+it needs to decrypt. And it does variable substitution and integer arithmetic too!
 
 ## Contents
 
