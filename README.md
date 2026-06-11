@@ -13,7 +13,11 @@ VPS, and homelab world, not cloud platforms with a managed secret store. The enc
 `.age` files live in the repo, just do a checkout, and `emergenv build` using the SSH
 host key the server already has. No KMS, no secret-injection pipeline, no separate key
 inventory - the secrets ride along in the repo and the box already holds the only key
-it needs to decrypt. And it does variable substitution and integer arithmetic too!
+it needs to decrypt.
+
+At its simplest it's git-crypt for .env files - three commands. Everything else
+(DRY composition, profiles, variable substitution, integer arithmetic) is opt-in when you
+need it. See [Simplest possible use](#simplest-possible-use-just-encrypt-one-file).
 
 ## Contents
 
@@ -624,6 +628,12 @@ Note that pass 2 is not atomic: if it fails partway (for example a verify-on-wri
 error), some `.age` files will already be on the new recipient set and others not.
 Fix the cause and run `rekey` again - it is safe to repeat.
 
+Because of this, run `rekey` on a **clean working tree** (everything committed) and
+commit its result as a single change. Then a rare partway failure is trivially
+recoverable - `git checkout` back to the clean state and retry, rather than reasoning
+about a half-rewritten tree. The pass-1 pre-flight makes such a failure unlikely; the
+clean-tree habit makes it cheap regardless.
+
 There is intentionally **no per-file rekey**. It operates on the whole store on
 purpose: picking individual files makes it far too easy to leave one behind, and
 an omitted file is invisible - `age` ciphertext does not reveal its recipients, so
@@ -833,7 +843,17 @@ data, never a command, even on a `$`/`%` computed line.
 - **Recipients see everything they're a recipient of.** Access is per-directory
   (`authorized_keys` granularity), not per-value - there's no way to hand someone a
   single key out of a fragment they can otherwise decrypt.
+- **An SSH host key used as a recipient becomes secret-grade.** Using the server's
+  `/etc/ssh/ssh_host_*_key` as the decryption identity is convenient (see
+  [Deployment](#deployment)), but it means that key now decrypts every secret it is a
+  recipient of - and host keys get backed up, snapshotted, and copied with server images
+  in ways their owners rarely treat as sensitive. Anywhere that key lands, your secrets
+  can be decrypted. A dedicated deploy-user key (generate one just for this) keeps the
+  blast radius to a single key you manage deliberately, and avoids running the build as
+  root.
 - **Revocation is forward-only.** Removing a key and re-keying stops it decrypting
   *future* commits, but git history still contains the old `.age` files, and the revoked
-  key can still decrypt those. If a key is actually compromised, **rotate the secrets
-  themselves** (`edit` + commit), not just the recipient set.
+  key can still decrypt those. So whenever access genuinely needs to end - a compromised
+  key, **or a person who has left** - **rotate the secrets themselves** (`edit` + commit),
+  not just the recipient set. Re-keying changes who can read new commits; only a new
+  secret *value* invalidates what the old key already saw.
