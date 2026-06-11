@@ -232,7 +232,10 @@ common choices:
   which makes it a convenient default - paste its `.pub` into `authorized_keys` and
   there's no key to generate. The catch: it's readable only by root, so the build has
   to run as root (usually fine for a root-owned deploy hook). There's nothing special
-  about the host key; a user key is equally valid and avoids running as root.
+  about the host key; a user key is equally valid and avoids running as root. Note that
+  making the host key a recipient turns it secret-grade - it then decrypts every secret
+  it can, so it matters wherever host keys get backed up or imaged
+  ([Security](#security)).
 
 After adding the server's public key to `emergenv/authorized_keys` (or a narrower set),
 run `emergenv rekey` so the existing `.age` files gain the new recipient, and commit. On
@@ -584,7 +587,7 @@ If `--all` is passed rather than a `<fragment>`, all `.age` files are decrypted,
 ### encrypt [`<fragment>`|--all] [--keep]
 
 Encrypts `<fragment>.env` to `<fragment>.age`, **overwriting** `<fragment>.age` if it exists, and
-aborting with an error of `<fragment>.env` doesn't exist.
+aborting with an error if `<fragment>.env` doesn't exist.
 
 If `--all` is passed rather than a `<fragment>`, all `.env` files are encrypted
 (**overwriting**).
@@ -799,8 +802,12 @@ git commit -am "revoke <name>"
 
 `rekey` rewrites *all* `.age` files (see [rekey](#rekey)); there is deliberately no
 per-file version, because an `.age` doesn't reveal its recipients and a forgotten file
-would silently stay readable by the revoked key. See [Security](#security) on why this
-isn't enough when a key is actually compromised.
+would silently stay readable by the revoked key.
+
+Re-keying only stops the removed key decrypting *future* commits - it can still decrypt
+the old `.age` blobs already in git history. So when access genuinely needs to end - a
+compromised key, **or a person who has left** - also **rotate the affected secret
+values** (`edit` + commit), not just the recipient set. See [Security](#security).
 
 ### Onboard a new server
 
