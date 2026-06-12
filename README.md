@@ -1038,6 +1038,16 @@ Committed artefacts (the `.age` ciphertext, `authorized_keys`, `.gitignore`) and
 mode beyond the executable bit, so a checkout resets them to the umask default regardless
 - restricting them would only create a false sense of security.
 
+**On Windows, the file-system safeguards are off.** Both the recipient-trust pre-flight
+and the `0600` plaintext restriction rely on Unix ownership and permission bits, which
+don't map onto NTFS ACLs (and the `grp`/`pwd`/`fchmod` APIs they use don't exist there).
+On Windows *emergenv* therefore skips the trust check entirely (it never returns `253`)
+and writes plaintext `.env` files without tightening their permissions. The encryption
+itself is unaffected - `age` works the same - but locking down the store and the
+decrypted output is your responsibility (NTFS permissions / BitLocker). *emergenv* is
+built for git-based deploys to Unix servers; Windows is supported for building and
+editing, not as a hardened target.
+
 **What's *not* protected - and is your responsibility:**
 
 - **The built output is plaintext.** `.env` / `<target>.env` on disk holds real secrets.

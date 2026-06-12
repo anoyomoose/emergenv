@@ -19,7 +19,7 @@ from types import SimpleNamespace
 import pytest
 from conftest import Run, requires_age
 
-from emergenv import security
+from emergenv import cli, security
 from emergenv.security import InsecureStoreError, recipient_trust_violations
 
 
@@ -334,3 +334,27 @@ def test_check_raises_insecurestoreerror(
     data.chmod(0o777)
     with pytest.raises(InsecureStoreError, match="refusing to encrypt"):
         security.check_recipient_trust()
+
+
+# --- Windows: the whole check is disabled -----------------------------------
+
+
+def test_windows_disables_trust_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    data = _store(tmp_path)
+    data.chmod(0o777)  # would be flagged on POSIX
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert recipient_trust_violations() == []
+    security.check_recipient_trust()  # must not raise
+
+
+def test_write_private_degrades_without_fchmod(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # os.fchmod is absent on Windows; _write_private must still write the file.
+    monkeypatch.delattr(os, "fchmod", raising=False)
+    target = tmp_path / "out.env"
+    cli._write_private(target, b"SECRET=1\n")
+    assert target.read_bytes() == b"SECRET=1\n"

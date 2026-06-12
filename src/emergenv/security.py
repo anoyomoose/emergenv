@@ -14,18 +14,30 @@ A static check of the trust path is the only thing that closes the hole.
 This is a guard, not a guarantee: it is inherently TOCTOU (permissions could
 change between this check and the actual write). It closes the realistic risk - a
 persistently mis-permissioned store - rather than promising atomicity.
+
+The whole check is POSIX-only. It rests on Unix ownership, permission bits and
+group semantics, none of which map onto Windows ACLs, and the ``grp``/``pwd``
+modules it needs do not exist there. On Windows it is therefore disabled
+entirely: :func:`recipient_trust_violations` returns nothing and securing the
+store is the user's responsibility (NTFS permissions). See the README's Security
+section.
 """
 
 from __future__ import annotations
 
-import grp
 import os
-import pwd
 import stat
 import sys
 
 from . import EmergenvError
 from .paths import data_dir
+
+# grp/pwd are POSIX-only and absent on Windows; guard the import so the module
+# (and therefore the whole CLI) stays importable there. They are only ever used
+# from the POSIX branch of recipient_trust_violations.
+if sys.platform != "win32":
+    import grp
+    import pwd
 
 
 class InsecureStoreError(EmergenvError):
@@ -148,7 +160,12 @@ def recipient_trust_violations() -> list[str]:
     ancestry, and every problem is collected (not just the first) so the whole
     store can be fixed in one pass. An empty list means the store is safe; a
     missing data dir yields ``[]`` - the command itself raises "run init".
+
+    On Windows the check is disabled (Unix-only; see the module docstring) and
+    this always returns ``[]``.
     """
+    if sys.platform == "win32":
+        return []
     base = data_dir()
     if not base.is_dir():
         return []

@@ -154,10 +154,15 @@ def _write_private(path: Path, data: bytes) -> None:
     does not record file modes beyond the executable bit, so it would reset them
     to the umask default on the next checkout anyway - restricting them here would
     only create a false sense of security.
+
+    On Windows the 0o600 restriction does not apply (Unix mode bits don't map onto
+    NTFS ACLs, and ``os.fchmod`` is absent), so the file is written without it -
+    securing it is the user's responsibility. See the README's Security section.
     """
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "wb") as handle:
-        os.fchmod(handle.fileno(), 0o600)
+        if hasattr(os, "fchmod"):  # POSIX only; absent on Windows
+            os.fchmod(handle.fileno(), 0o600)
         handle.write(data)
 
 
