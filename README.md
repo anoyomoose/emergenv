@@ -69,9 +69,9 @@ and you don't want it.
   data, never a command. (See [Expansion](#expansion) / [EXPANSION.md](https://github.com/anoyomoose/emergenv/blob/main/EXPANSION.md).)
 - **It won't silently corrupt your secrets.** Every encryption is decrypted again in memory
   and verified against the original before anything is written.
-- **No Python dependencies.** Pure stdlib and the [age](https://github.com/FiloSottile/age) tool
+- **No Python dependencies.** Pure stdlib and the [age](https://github.com/FiloSottile/age) tool.
 - **Recoverable.** All cryptographic operations are outsourced to [age](https://github.com/FiloSottile/age);
-  even without *emergenv* you can decrypt any `.age` file using `age -d -i /path/to/key /path/to/file.age`
+  even without *emergenv* you can decrypt any `.age` file using `age -d -i /path/to/key /path/to/file.age`.
 
 If you're on a cloud platform with a real secret manager, use that. If you deploy to
 dedicated servers from git, this is built for exactly that.
