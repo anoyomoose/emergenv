@@ -67,7 +67,7 @@ per-file-ignores = ['*/__init__.py:F401']
 # F401: Unused imports - disable for __init__.py files
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 # src/ layout: let mypy find the `emergenv` package and the tests' conftest.
 mypy_path = "src:tests"
 explicit_package_bases = true

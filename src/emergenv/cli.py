@@ -30,7 +30,7 @@ from .crypto import (
     encrypt_verified,
     inaccessible_authorized_keys,
 )
-from .merge import build_target
+from .merge import _Builder, build_target, build_with_trace
 from .output import colourize, log
 from .paths import (
     AGE_SUFFIX,
@@ -398,6 +398,25 @@ def cmd_clean(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_trace(
+    values: list[str] | None, trace_all: bool
+) -> tuple[bool, list[str]] | None:
+    """Parse ``--trace`` / ``--trace-all`` flags into a (all_flag, names) pair.
+
+    Returns ``None`` when tracing is not requested at all.  Returns
+    ``(True, [])`` when every variable should be traced, or
+    ``(False, names)`` for a specific subset.
+    """
+    if not values and not trace_all:
+        return None
+    names: list[str] = []
+    for chunk in values or []:
+        names += [p for p in chunk.split(",") if p]
+    if trace_all or "*" in names:
+        return (True, [])
+    return (False, names)
+
+
 def cmd_build(args: argparse.Namespace) -> int:
     """Build ``<target>.env`` from ``<target>.emerg.*`` (and ``.local``)."""
     require_data_dir()
@@ -416,18 +435,35 @@ def cmd_build(args: argparse.Namespace) -> int:
         log(f"profiles: {' '.join(profiles)}")
     log(f"emergenv: {data_dir()}")
 
-    # build_target logs the resolved base, local, and each imported fragment.
-    text = build_target(
-        target,
-        profiles,
+    trace = _parse_trace(
+        getattr(args, "trace", None), getattr(args, "trace_all", False)
+    )
+
+    build_kwargs = dict(
         mark_source=not args.no_source,
         bare=args.bare,
         local=not args.no_local,
         verbose=args.verbose,
     )
 
+    builder: _Builder | None = None
+    trace_wanted: list[str] | None = None
+    if trace is None:
+        # build_target logs the resolved base, local, and each imported fragment.
+        text = build_target(target, profiles, **build_kwargs)
+    else:
+        text, builder = build_with_trace(target, profiles, **build_kwargs)
+        # Validate requested variables once, before any output, so an unknown
+        # name fails cleanly on stderr without writing partial stdout.
+        all_keys = builder.trace_keys()
+        trace_wanted = all_keys if trace[0] else trace[1]
+        missing = [k for k in trace_wanted if k not in all_keys]
+        if missing:
+            raise EmergenvError(f"variable {missing[0]!r} not in build output")
+
     if to_stdout:
         sys.stdout.write(text)
+        # the trace is intentionally dropped here (log_mode == LOG_OFF).
         return 0
 
     if args.output:
@@ -439,6 +475,10 @@ def cmd_build(args: argparse.Namespace) -> int:
         out.write_text(text, encoding="utf-8")
     except OSError as exc:
         raise EmergenvError(f"cannot write {out}: {exc.strerror or exc}")
+
+    if builder is not None and trace_wanted is not None:
+        log(builder.trace_text(trace_wanted).rstrip("\n"))
+
     return 0
 
 
@@ -559,6 +599,18 @@ def build_parser() -> argparse.ArgumentParser:
         "-v",
         action="store_true",
         help="show every search path tried (both .age/.env), colour-coded",
+    )
+    p_build.add_argument(
+        "--trace",
+        metavar="<vars>",
+        action="append",
+        help="trace the assignment history of variables (comma-separated, "
+        "repeatable; '*' for all). Suppressed under --output -",
+    )
+    p_build.add_argument(
+        "--trace-all",
+        action="store_true",
+        help="trace every variable in the output (same as --trace '*')",
     )
     p_build.set_defaults(func=cmd_build)
 

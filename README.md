@@ -684,7 +684,7 @@ a pre-commit hook). Colours are emitted only to a terminal, and suppressed when
 
 Deletes all `.env` files for which a `.age` file exists with the same contents.
 
-### build <target> [--profile <profile>[,<profile>[...]]] [--no-source] [--bare] [--no-local] [--output <filename>] [--verbose]
+### build <target> [--profile <profile>[,<profile>[...]]] [--no-source] [--bare] [--no-local] [--output <filename>] [--verbose] [--trace <vars>]
 
 Builds `<target>` and writes the result to `<target>.env` in the working
 directory (which should not be committed). The base file (and its optional
@@ -757,6 +757,34 @@ importing: database
   - ignoring: dot/dev/database.env [age-preferred,match]
 writing: /home/user/myproject/.env
 ```
+
+Pass `--trace <vars>` to print, after the build, the full assignment history of
+selected variables - every place the value was set or changed, nested by `@include`
+/ `@<key>=` and source file, with the final value in the header. Like `--profile` it
+is comma-separated and repeatable (`--trace A,B --trace C`); `--trace '*'` (quote it,
+or the shell will expand the `*`) or the convenience flag `--trace-all` traces every
+variable in the output. A name that isn't in the built output is an error. Like the
+other logs it goes to stdout and is suppressed under `--output -`.
+
+A computed (`$`/`%`) line shows both the template and the value it resolved to;
+keyref candidates that lost the inner selection are marked `[ignored]` (they are
+scanned but never evaluated). Example (`--trace MY_VAR`):
+
+```text
+MY_VAR=1
+  - @include base
+    - emergenv/base.age
+      MY_VAR=1
+    - emergenv/profile/base.age
+      MY_VAR=2
+  - $MY_VAR=$(( MY_VAR + 1 ))
+    MY_VAR=3
+  - MY_VAR=1
+```
+
+(`@MY_VAR=base` would show the same per-source breakdown but mark the candidates it
+didn't pick `[ignored]`; a keyref that pulls a *computed* line re-evaluates it where
+the keyref sits, per [EXPANSION.md](https://github.com/anoyomoose/emergenv/blob/main/EXPANSION.md).)
 
 #### The `.env` output (`dot` target)
 

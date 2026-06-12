@@ -25,7 +25,8 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from collections.abc import Iterator
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import EmergenvError
@@ -48,6 +49,45 @@ class Line:
 
     text: str
     source: str
+
+
+@dataclass
+class _TraceNode:
+    """A node in a variable's provenance tree."""
+
+    kind: str  # "root" | "directive" | "assign"
+    directive: str | None = None  # for kind == "directive"
+    key: str | None = None  # for kind == "assign"
+    source: str | None = None  # file label, for kind == "assign"
+    text: str | None = None  # literal assignment line
+    ignored: bool = False  # keyref candidate that lost the inner selection
+    value: str | None = None  # resolved value (filled after substitution)
+    children: list["_TraceNode"] = field(default_factory=list)
+
+
+class _Trace:
+    """Records a provenance tree as the builder expands directives."""
+
+    def __init__(self) -> None:
+        self.root = _TraceNode(kind="root")
+        self._stack: list[_TraceNode] = [self.root]
+
+    def enter(self, directive: str) -> None:
+        node = _TraceNode(kind="directive", directive=directive)
+        self._stack[-1].children.append(node)
+        self._stack.append(node)
+
+    def leave(self) -> None:
+        self._stack.pop()
+
+    def assign(
+        self, key: str, source: str, text: str, *, ignored: bool = False
+    ) -> None:
+        self._stack[-1].children.append(
+            _TraceNode(
+                kind="assign", key=key, source=source, text=text, ignored=ignored
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -204,6 +244,7 @@ class _Builder:
         bare: bool = False,
         local: bool = True,
         verbose: bool = False,
+        trace: bool = False,
     ):
         self.target = target
         self.profiles = profiles
@@ -211,6 +252,10 @@ class _Builder:
         self.bare = bare
         self.local = local
         self.verbose = verbose
+        self._trace: _Trace | None = _Trace() if trace else None
+        self._trace_final: dict[str, str] = {}
+        self._trace_order: list[str] = []
+        self._local_label: str | None = None
         self._resolve_cache: dict[str, list[Line]] = {}
         self._file_cache: dict[object, list[Line]] = {}
         self._stack: list[str] = []
@@ -219,6 +264,8 @@ class _Builder:
         lines = self._read_base()
         expanded = self._expand(lines)
         computed = self._substitute(expanded)
+        if self._trace is not None:
+            self._fill_trace_values(computed)
         # _render does the blank-line tidying (collapse runs, trim edges, drop
         # headers for blank-only sources).
         return _render(_last_wins(computed), self.mark_source, self.bare)
@@ -278,6 +325,7 @@ class _Builder:
 
         # The .local layer is plaintext-only and always relative to the cwd.
         local_path = working_dir() / f"{self.target}.local.emerg{ENV_SUFFIX}"
+        self._local_label = self._source_label(local_path)
         if not self.local:
             if self.verbose:
                 log(
@@ -347,22 +395,53 @@ class _Builder:
             directive = _parse_directive(line.text)
             if directive is None:
                 out.append(line)
+                if self._trace is not None:
+                    key = _assignment_key(line.text)
+                    if key is not None:
+                        self._trace.assign(key, line.source, line.text)
             elif directive[0] == "include":
+                if self._trace is not None:
+                    self._trace.enter(f"@include {directive[1]}")
                 out.extend(self._resolve(directive[1]))
+                if self._trace is not None:
+                    self._trace.leave()
             else:
-                _, exported, key, name = directive
-                win = self._winning_line(name, key)
+                _, exported, ref_key, name = directive
+                assert isinstance(ref_key, str)
                 prefix = "export " if exported else ""
+                if self._trace is None:
+                    win = self._winning_line(name, ref_key)
+                else:
+                    self._trace.enter(f"{prefix}@{ref_key}={name}")
+                    candidates = self._winning_lines_silent(name, ref_key)
+                    for cand in candidates[:-1]:
+                        self._trace.assign(
+                            ref_key, cand.source, cand.text, ignored=True
+                        )
+                    win = candidates[-1]
                 computed = _COMPUTED.match(win.text)
                 if computed is not None:
                     text = (
-                        f"{prefix}{computed.group('marker')}{key}"
+                        f"{prefix}{computed.group('marker')}{ref_key}"
                         f"={computed.group('template')}"
                     )
                 else:
-                    text = f"{prefix}{key}={_assignment_value(win.text)}"
+                    text = f"{prefix}{ref_key}={_assignment_value(win.text)}"
+                if self._trace is not None:
+                    self._trace.assign(ref_key, win.source, text)
+                    self._trace.leave()
                 out.append(Line(text, win.source))
         return out
+
+    def _winning_lines_silent(self, name: str, key: str) -> list[Line]:
+        """Resolve a keyref fragment without recording its sub-expansion into
+        the trace - we record only the matching candidates, not the whole
+        fragment. Suspends ``self._trace`` for the duration."""
+        saved, self._trace = self._trace, None  # suspend recording during resolve
+        try:
+            return self._winning_lines(name, key)
+        finally:
+            self._trace = saved
 
     def _stem_lines(self, stem: _Stem) -> list[str]:
         """Colour-coded breakdown lines for one age/env location."""
@@ -405,7 +484,7 @@ class _Builder:
                 log(line)
 
     def _resolve(self, name: str) -> list[Line]:
-        if name in self._resolve_cache:
+        if self._trace is None and name in self._resolve_cache:
             return self._resolve_cache[name]
         if name in self._stack:
             chain = " -> ".join([*self._stack, name])
@@ -425,17 +504,137 @@ class _Builder:
                 log(f"importing: {path.relative_to(data_dir()).as_posix()}")
             block.extend(self._expand(self._read_file(path)))
         self._stack.pop()
-        self._resolve_cache[name] = block
+        if self._trace is None:
+            self._resolve_cache[name] = block
         return block
 
-    def _winning_line(self, name: str, key: str) -> Line:
-        found = None
-        for line in self._resolve(name):
-            if _assignment_key(line.text) == key:
-                found = line
-        if found is None:
+    def _winning_lines(self, name: str, key: str) -> list[Line]:
+        matches = [
+            line for line in self._resolve(name) if _assignment_key(line.text) == key
+        ]
+        if not matches:
             raise EmergenvError(f"key {key!r} not found in {name!r}")
-        return found
+        return matches
+
+    def _winning_line(self, name: str, key: str) -> Line:
+        return self._winning_lines(name, key)[-1]
+
+    def _iter_assign_nodes(self, node: _TraceNode) -> Iterator[_TraceNode]:
+        """Non-ignored assign nodes in document (DFS pre-order) order."""
+        for child in node.children:
+            if child.kind == "assign":
+                if not child.ignored:
+                    yield child
+            else:
+                yield from self._iter_assign_nodes(child)
+
+    def _fill_trace_values(self, computed: list[Line]) -> None:
+        assert self._trace is not None
+        emitted = [c for c in computed if _assignment_key(c.text) is not None]
+        nodes = list(self._iter_assign_nodes(self._trace.root))
+        if len(nodes) != len(emitted):  # invariant guard - should never happen
+            raise EmergenvError(
+                "internal trace error: "
+                f"{len(nodes)} assign nodes vs {len(emitted)} emitted lines"
+            )
+        for node, line in zip(nodes, emitted):
+            node.value = _assignment_value(line.text)
+        self._trace_final = {}
+        self._trace_order = []
+        for line in emitted:
+            key = _assignment_key(line.text)
+            assert key is not None
+            self._trace_final[key] = _assignment_value(line.text)
+            if key not in self._trace_order:
+                self._trace_order.append(key)
+
+    def trace_keys(self) -> list[str]:
+        """Output variables in first-appearance order (valid after build())."""
+        return list(self._trace_order)
+
+    def _prune(self, node: _TraceNode, key: str) -> _TraceNode | None:
+        """Copy of node keeping only branches that mention ``key``."""
+        if node.kind == "assign":
+            return node if node.key == key else None
+        kept = [self._prune(c, key) for c in node.children]
+        kept_nodes = [c for c in kept if c is not None]
+        if node.kind != "root" and not kept_nodes:
+            return None
+        clone = _TraceNode(kind=node.kind, directive=node.directive)
+        clone.children = kept_nodes
+        return clone
+
+    @staticmethod
+    def _trace_is_computed(text: str) -> bool:
+        return _COMPUTED.match(text) is not None
+
+    def _render_assign_lines(self, node: _TraceNode, indent: int) -> list[str]:
+        pad = "  " * indent
+        suffix = " [ignored]" if node.ignored else ""
+        out = [f"{pad}{node.text}{suffix}"]
+        if (
+            not node.ignored
+            and self._trace_is_computed(node.text or "")
+            and node.value is not None
+        ):
+            out.append(f"{pad}{node.key}={node.value}")
+        return out
+
+    def _render_directive_children(
+        self, children: list[_TraceNode], indent: int
+    ) -> list[str]:
+        out: list[str] = []
+        i = 0
+        while i < len(children):
+            c = children[i]
+            if c.kind == "directive":
+                out += self._render_node(c, indent)
+                i += 1
+                continue
+            source = c.source
+            out.append(f"{'  ' * indent}- {source}")
+            while (
+                i < len(children)
+                and children[i].kind == "assign"
+                and children[i].source == source
+            ):
+                out += self._render_assign_lines(children[i], indent + 1)
+                i += 1
+        return out
+
+    def _render_node(self, node: _TraceNode, indent: int) -> list[str]:
+        if node.kind == "directive":
+            out = [f"{'  ' * indent}- {node.directive}"]
+            out += self._render_directive_children(node.children, indent + 1)
+            return out
+        # top-level direct assign
+        tag = (
+            " [local]"
+            if self._local_label is not None and node.source == self._local_label
+            else ""
+        )
+        pad = "  " * indent
+        out = [f"{pad}- {node.text}{tag}"]
+        if self._trace_is_computed(node.text or "") and node.value is not None:
+            out.append(f"{'  ' * (indent + 1)}{node.key}={node.value}")
+        return out
+
+    def _render_variable(self, key: str) -> list[str]:
+        assert self._trace is not None
+        out = [f"{key}={self._trace_final[key]}"]
+        pruned = self._prune(self._trace.root, key)
+        assert pruned is not None
+        for child in pruned.children:
+            out += self._render_node(child, 1)
+        return out
+
+    def trace_text(self, keys: list[str]) -> str:
+        """Render a locked-format provenance report for the given keys."""
+        assert self._trace is not None
+        lines: list[str] = []
+        for key in keys:
+            lines += self._render_variable(key)
+        return "\n".join(lines) + "\n" if lines else ""
 
     def _substitute(self, lines: list[Line]) -> list[Line]:
         """Evaluate ``$KEY=`` / ``%KEY=`` lines against a live namespace.
@@ -517,7 +716,10 @@ def build_target(
     local: bool = True,
     verbose: bool = False,
 ) -> str:
-    """Build ``<target>`` into the final ``.env`` text (see module docstring)."""
+    """Build ``<target>`` into the final ``.env`` text (see module docstring).
+
+    For a build whose variable trace you also want, use :func:`build_with_trace`.
+    """
     return _Builder(
         target,
         profiles,
@@ -526,3 +728,26 @@ def build_target(
         local=local,
         verbose=verbose,
     ).build()
+
+
+def build_with_trace(
+    target: str,
+    profiles: list[str],
+    *,
+    mark_source: bool = True,
+    bare: bool = False,
+    local: bool = True,
+    verbose: bool = False,
+) -> tuple[str, _Builder]:
+    """Build with tracing enabled; return (text, builder) so the caller can
+    render the variable trace via ``builder.trace_text(...)``."""
+    builder = _Builder(
+        target,
+        profiles,
+        mark_source=mark_source,
+        bare=bare,
+        local=local,
+        verbose=verbose,
+        trace=True,
+    )
+    return builder.build(), builder
