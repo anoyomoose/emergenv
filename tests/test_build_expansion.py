@@ -205,12 +205,15 @@ def test_chained_computed(bd: SimpleNamespace) -> None:
 
 
 def test_no_source_build_with_computed_line(bd: SimpleNamespace) -> None:
-    """--no-source build with a computed line: no FROM: but COMPUTED: still present."""
+    """--no-source drops both provenance comments (# FROM: and # COMPUTED:),
+    leaving only the resolved assignments."""
     bd.write_root("my.emerg.env", "HOST=db\n$URL=http://${HOST}\n")
     out = build_target("my", [], mark_source=False)
     assert "FROM" not in out
-    assert "# COMPUTED: $URL=http://${HOST}" in out
+    assert "COMPUTED" not in out
     assert active(out) == ["HOST=db", "URL=http://db"]
+    # the resolved assignment survives even though its provenance is gone
+    assert out == "HOST=db\nURL=http://db\n"
 
 
 def test_computed_result_overridden_by_plain_last_wins(bd: SimpleNamespace) -> None:

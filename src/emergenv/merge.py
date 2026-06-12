@@ -266,7 +266,9 @@ def _render(lines: list[Line], mark_source: bool, bare: bool) -> str:
     leading/trailing blanks are dropped, and a ``# FROM: <source>`` header is
     emitted before the first *content* (non-blank) line of each new source
     (unless ``mark_source`` is false). A source that contributes only a blank
-    line therefore gets no header.
+    line therefore gets no header. When ``mark_source`` is false the
+    ``# COMPUTED: <directive>`` provenance comments are also dropped, leaving only
+    the resolved assignment they precede.
     """
     if bare:
         kept = [line.text for line in lines if not _is_blank_or_comment(line.text)]
@@ -279,6 +281,8 @@ def _render(lines: list[Line], mark_source: bool, bare: bool) -> str:
         if line.text.strip() == "":
             pending_blank = bool(out)  # collapse runs; never emit a leading blank
             continue
+        if not mark_source and line.text.startswith("# COMPUTED:"):
+            continue  # provenance for the computed value, suppressed with sources
         if pending_blank:
             out.append("")
             pending_blank = False

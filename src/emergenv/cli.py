@@ -702,7 +702,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_build.add_argument(
         "--no-source",
         action="store_true",
-        help="omit the '# FROM: <path>' provenance markers",
+        help="omit provenance comments ('# FROM: <path>' and '# COMPUTED:')",
     )
     p_build.add_argument(
         "--bare",

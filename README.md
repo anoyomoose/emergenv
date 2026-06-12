@@ -760,7 +760,10 @@ By default each emitted line is annotated with a `# FROM: <path>` comment markin
 the source file it came from (one header per contiguous run, so it isn't repeated
 per line). Overridden values stay visible - commented out - under their own
 source, so you can see exactly where every value came from and what shadowed it.
-Pass `--no-source` to omit these markers.
+A computed (`$`/`%`) line is similarly annotated with a `# COMPUTED: <directive>`
+comment showing the original expression above its resolved value. Pass
+`--no-source` to omit both kinds of provenance comment (`# FROM:` and
+`# COMPUTED:`), leaving only the resolved assignments.
 
 Pass `--bare` to strip the output of all comments and blank lines entirely,
 leaving only the winning assignments (one line per variable).
