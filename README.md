@@ -409,15 +409,22 @@ with no `--profile` simply uses the base fragments.
 
 ## Syntax
 
-`.emerg.env` files are ordinary `.env` files with two extra directives:
+`.emerg.env` files are ordinary `.env` files with a few extra constructs:
 
-- `@include <fragment>` - splice in the entire resolved contents of `<fragment>`
-  (optionally filtered to a whitelist/blacklist of keys, see below)
-- `@<key>=<fragment>` - emit a single line carrying the winning assignment of
-  `<key>` (case-sensitive) from the resolved contents of `<fragment>`
+- [`@include <fragment>`](#include-fragment) - splice in the resolved contents of
+  `<fragment>` (optionally filtered to a whitelist/blacklist of keys).
+- [`@<key>=<fragment>`](#keyfragment) - emit a single line carrying the winning
+  assignment of `<key>` (case-sensitive) from the resolved contents of `<fragment>`.
+- [`@filter <key>...`](#filter-key) - restrict the **final output** to a
+  whitelist/blacklist of keys (everything is still evaluated; hidden keys are just
+  dropped from the output).
+- [`$<key>=` / `%<key>=`](#expansion) - a *computed* assignment whose value is an
+  expression (`${VAR}` substitution, `$(( ))` arithmetic) evaluated at build time.
 
-Both directives build on the same operation: **resolving a `<fragment>`** into one
-merged env block. They differ only in how they consume that block.
+`@include` and `@<key>=` both build on the same operation - **resolving a
+`<fragment>`** into one merged env block - and differ only in how they consume it.
+`@filter` (whole-file output filter) and the computed `$`/`%` forms are covered in
+their own sections.
 
 ### Resolving a `<fragment>`
 
@@ -504,6 +511,27 @@ destination (and errors if `HOST` is undefined there); use `@include` instead wh
 you want a formula computed in the fragment's own context. See
 [EXPANSION.md](https://github.com/anoyomoose/emergenv/blob/main/EXPANSION.md) for the
 exact rules.
+
+### `@filter <key>...`
+
+`@filter` selects which keys survive to the **final output**, applied *after* all
+evaluation - so you can compute many interdependent variables but emit only a few.
+
+- `@filter K1 K2` - keep only these keys (whitelist).
+- `@filter !K1 !K2` - keep everything except these (blacklist).
+
+It uses the same key grammar as `@include`: mixing included and excluded keys in one
+`@filter` is an error, and `@filter` with no keys is an error. A whitelist key that
+isn't in the output is an error; an absent blacklist key is harmless.
+
+Filtered-out keys are **still evaluated** - a kept value computed from a hidden key is
+correct - they are just commented out of normal output (and therefore dropped entirely
+by `--bare`). `@filter` is whole-file: it may appear only in the base or `.local` file
+(never in an included fragment), it may appear more than once (applied in order), and
+its position among other lines doesn't matter. `emergenv build --no-filter` ignores it.
+
+Note `@filter=x` (no space) is still a *keyref* for a key literally named `filter`;
+the directive needs a space: `@filter x`.
 
 ### Constraints
 
@@ -706,7 +734,7 @@ a pre-commit hook). Colours are emitted only to a terminal, and suppressed when
 
 Deletes all `.env` files for which a `.age` file exists with the same contents.
 
-### build <target> [--profile <profile>[,<profile>[...]]] [--no-source] [--bare] [--no-local] [--output <filename>] [--verbose] [--trace <vars>]
+### build <target> [--profile <profile>[,<profile>[...]]] [--no-source] [--bare] [--no-local] [--no-filter] [--output <filename>] [--verbose] [--trace <vars>]
 
 Builds `<target>` and writes the result to `<target>.env` in the working
 directory (which should not be committed). The base file (and its optional
@@ -736,6 +764,9 @@ content - a source that contributes nothing but a blank line gets no header.
 Pass `--no-local` to ignore the `<target>.local.emerg.env` override and build from
 the base file alone (useful for reproducing the committed/deploy build while a
 local override is present).
+
+Pass `--no-filter` to ignore any [`@filter`](#filter-key) directives and emit every
+key (everything is still evaluated, so this just un-hides the filtered keys).
 
 Pass `--output <filename>` to override the output filename, use `-` as filename
 to write to stdout.
@@ -946,3 +977,7 @@ data, never a command, even on a `$`/`%` computed line.
   key, **or a person who has left** - **rotate the secrets themselves** (`edit` + commit),
   not just the recipient set. Re-keying changes who can read new commits; only a new
   secret *value* invalidates what the old key already saw.
+
+
+TODO: edit --all
+TODO: pyproject.toml

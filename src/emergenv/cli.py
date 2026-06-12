@@ -444,6 +444,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         bare=args.bare,
         local=not args.no_local,
         verbose=args.verbose,
+        no_filter=args.no_filter,
     )
 
     builder: _Builder | None = None
@@ -611,6 +612,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--trace-all",
         action="store_true",
         help="trace every variable in the output (same as --trace '*')",
+    )
+    p_build.add_argument(
+        "--no-filter",
+        action="store_true",
+        help="ignore @filter directives (emit every key)",
     )
     p_build.set_defaults(func=cmd_build)
 

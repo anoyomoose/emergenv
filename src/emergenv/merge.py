@@ -117,6 +117,9 @@ _KEYNAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _INCLUDE = re.compile(r"^\s*@include\s+(\S.*?)\s*$")
 _KEYREF = re.compile(r"^\s*(export\s+)?@([A-Za-z_][A-Za-z0-9_]*)=(\S.*?)\s*$")
 _LEADING_AT = re.compile(r"^\s*(?:export\s+)?@")
+# @filter <keys> - whole-file output filter. Requires whitespace (not '=' or a
+# word char) after 'filter' so '@filter=db' stays an ordinary keyref.
+_FILTER = re.compile(r"^\s*@filter(?![=\w])\s*(.*?)\s*$")
 # A computed assignment: optional ``export``, then ``$`` (built keys only) or
 # ``%`` (also the environment), KEY, ``=``, and the template to expand.
 _COMPUTED = re.compile(
@@ -139,14 +142,15 @@ def _assignment_value(text: str) -> str:
     return text.split("=", 1)[1]
 
 
-def _parse_include_keys(
-    tokens: list[str], name: str
+def _parse_key_filter(
+    tokens: list[str], where: str
 ) -> tuple[str, frozenset[str], tuple[str, ...]] | None:
-    """Classify the key tokens after an ``@include`` fragment name.
+    """Classify a list of key tokens for ``@include`` or ``@filter``.
 
-    Returns ``None`` (no filter), ``("only", keys, raw)`` (whitelist), or
+    Returns ``None`` (no tokens), ``("only", keys, raw)`` (whitelist), or
     ``("except", keys, raw)`` (blacklist).  Raises on an invalid key token or
-    on a mix of included and excluded keys.
+    on a mix of included and excluded keys.  *where* is used in error messages
+    (e.g. ``"@include 'frag'"`` or ``"@filter"``).
     """
     if not tokens:
         return None
@@ -155,10 +159,10 @@ def _parse_include_keys(
     for tok in tokens:
         bare = tok[1:] if tok.startswith("!") else tok
         if not _KEYNAME.fullmatch(bare):
-            raise EmergenvError(f"@include {name!r}: invalid key {tok!r}")
+            raise EmergenvError(f"{where}: invalid key {tok!r}")
         (neg if tok.startswith("!") else pos).append(bare)
     if pos and neg:
-        raise EmergenvError(f"@include {name!r}: cannot mix included and excluded keys")
+        raise EmergenvError(f"{where}: cannot mix included and excluded keys")
     mode = "only" if pos else "except"
     return (mode, frozenset(pos or neg), tuple(tokens))
 
@@ -183,14 +187,21 @@ def _parse_directive(text: str) -> tuple | None:
     Returns ``("include", name, spec)``, ``("keyref", exported, key, name)``,
     or ``None`` if the line is not a directive. *spec* is ``None`` for a plain
     ``@include`` or a ``(mode, keyset, raw_keys)`` triple for a filtered
-    include (see :func:`_parse_include_keys`). Raises :class:`EmergenvError`
+    include (see :func:`_parse_key_filter`). Raises :class:`EmergenvError`
     for a line that looks like a directive but is malformed.
     """
     include = _INCLUDE.match(text)
     if include:
         parts = include.group(1).split()
         name = parts[0]
-        return ("include", name, _parse_include_keys(parts[1:], name))
+        return ("include", name, _parse_key_filter(parts[1:], f"@include {name!r}"))
+
+    filt = _FILTER.match(text)
+    if filt:
+        tokens = filt.group(1).split()
+        if not tokens:
+            raise EmergenvError("@filter requires at least one key")
+        return ("filter", _parse_key_filter(tokens, "@filter"))
 
     keyref = _KEYREF.match(text)
     if keyref:
@@ -289,6 +300,7 @@ class _Builder:
         local: bool = True,
         verbose: bool = False,
         trace: bool = False,
+        no_filter: bool = False,
     ):
         self.target = target
         self.profiles = profiles
@@ -303,6 +315,9 @@ class _Builder:
         self._resolve_cache: dict[str, list[Line]] = {}
         self._file_cache: dict[object, list[Line]] = {}
         self._stack: list[str] = []
+        self._filters: list[tuple[str, frozenset[str], tuple[str, ...]]] = []
+        self._filtered_out: frozenset[str] = frozenset()
+        self._no_filter = no_filter
 
     def build(self) -> str:
         lines = self._read_base()
@@ -310,9 +325,40 @@ class _Builder:
         computed = self._substitute(expanded)
         if self._trace is not None:
             self._fill_trace_values(computed)
+        resolved = _last_wins(computed)
+        filtered = self._apply_filters(resolved)
         # _render does the blank-line tidying (collapse runs, trim edges, drop
         # headers for blank-only sources).
-        return _render(_last_wins(computed), self.mark_source, self.bare)
+        return _render(filtered, self.mark_source, self.bare)
+
+    def _apply_filters(self, lines: list[Line]) -> list[Line]:
+        if self._no_filter or not self._filters:
+            return lines
+        all_keys: set[str] = set()
+        for ln in lines:
+            k = _assignment_key(ln.text)
+            if k is not None:
+                all_keys.add(k)
+        visible = set(all_keys)
+        for mode, keyset, _raw in self._filters:
+            if mode == "only":
+                missing = sorted(k for k in keyset if k not in all_keys)
+                if missing:
+                    raise EmergenvError(
+                        f"@filter: key {missing[0]!r} not found in output"
+                    )
+                visible &= keyset
+            else:  # "except": lenient, no existence check
+                visible -= keyset
+        self._filtered_out = frozenset(all_keys - visible)
+        out: list[Line] = []
+        for ln in lines:
+            k = _assignment_key(ln.text)
+            if k is not None and k not in visible:
+                out.append(Line("# " + ln.text, ln.source))
+            else:
+                out.append(ln)
+        return out
 
     def _log_base_breakdown(self, cwd_env: Path, em_age: Path, em_env: Path) -> None:
         log(f"target: {self.target}")
@@ -479,6 +525,13 @@ class _Builder:
                                 self._trace.assign(k, ln.source, ln.text)
                         self._trace.leave()
                     out.extend(kept)
+            elif directive[0] == "filter":
+                if self._stack:
+                    raise EmergenvError(
+                        "@filter is only allowed in the base or .local file, "
+                        "not in an included fragment"
+                    )
+                self._filters.append(directive[1])
             else:
                 _, exported, ref_key, name = directive
                 assert isinstance(ref_key, str)
@@ -703,7 +756,8 @@ class _Builder:
 
     def _render_variable(self, key: str) -> list[str]:
         assert self._trace is not None
-        out = [f"{key}={self._trace_final[key]}"]
+        suffix = " [filtered]" if key in self._filtered_out else ""
+        out = [f"{key}={self._trace_final[key]}{suffix}"]
         pruned = self._prune(self._trace.root, key)
         assert pruned is not None
         for child in pruned.children:
@@ -797,6 +851,7 @@ def build_target(
     bare: bool = False,
     local: bool = True,
     verbose: bool = False,
+    no_filter: bool = False,
 ) -> str:
     """Build ``<target>`` into the final ``.env`` text (see module docstring).
 
@@ -809,6 +864,7 @@ def build_target(
         bare=bare,
         local=local,
         verbose=verbose,
+        no_filter=no_filter,
     ).build()
 
 
@@ -820,6 +876,7 @@ def build_with_trace(
     bare: bool = False,
     local: bool = True,
     verbose: bool = False,
+    no_filter: bool = False,
 ) -> tuple[str, _Builder]:
     """Build with tracing enabled; return (text, builder) so the caller can
     render the variable trace via ``builder.trace_text(...)``."""
@@ -831,5 +888,6 @@ def build_with_trace(
         local=local,
         verbose=verbose,
         trace=True,
+        no_filter=no_filter,
     )
     return builder.build(), builder
