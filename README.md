@@ -412,8 +412,8 @@ with no `--profile` simply uses the base fragments.
 `.emerg.env` files are ordinary `.env` files with two extra directives:
 
 - `@include <fragment>` - splice in the entire resolved contents of `<fragment>`
-- `@<key>=<fragment>` - emit a single `<key>=<value>` line, taking the winning
-  value of `<key>` (case-sensitive) from the resolved contents of `<fragment>`
+- `@<key>=<fragment>` - emit a single line carrying the winning assignment of
+  `<key>` (case-sensitive) from the resolved contents of `<fragment>`
 
 Both directives build on the same operation: **resolving a `<fragment>`** into one
 merged env block. They differ only in how they consume that block.
@@ -469,9 +469,19 @@ The directive line is replaced by the entire merged block for `<fragment>`.
 
 ### `@<key>=<fragment>`
 
-The directive line is replaced by a single line, `<key>=<value>`, where
-`<value>` is the winning value of `<key>` within the merged block for `<fragment>`.
-If `<fragment>` resolves but contains no `<key>`, *emergenv* aborts with an error.
+The directive line is replaced by a single line carrying the **winning assignment**
+of `<key>` within the merged block for `<fragment>` (the last one, per last-wins). If
+`<fragment>` resolves but contains no `<key>`, *emergenv* aborts with an error.
+
+What travels is the winning *line*, not a pre-resolved value. If that line is a
+computed assignment (`$<key>=` / `%<key>=`, see [Expansion](#expansion)), its marker
+and template are copied verbatim and evaluated **where the directive sits** - against
+the surrounding build, not inside `<fragment>` - and the template's dependencies are
+**not** carried along. So a pulled `$URL=${HOST}/db` reads `HOST` from the
+destination (and errors if `HOST` is undefined there); use `@include` instead when
+you want a formula computed in the fragment's own context. See
+[EXPANSION.md](https://github.com/anoyomoose/emergenv/blob/main/EXPANSION.md) for the
+exact rules.
 
 ### Constraints
 
@@ -680,6 +690,9 @@ Builds `<target>` and writes the result to `<target>.env` in the working
 directory (which should not be committed). The base file (and its optional
 `.local` extension) is resolved as described under [Base file](#base-file).
 
+A `<target>` may be given with a `.emerg.(age|env)`, `.local.emerg.(age|env)`, or
+`.env` suffix (stripped for shell-completion convenience).
+
 `--profile` takes a comma separated list of profiles, processed in the passed order.
 A profile must be a single path segment (no `/`).
 
@@ -744,9 +757,6 @@ importing: database
   - ignoring: dot/dev/database.env [age-preferred,match]
 writing: /home/user/myproject/.env
 ```
-
-A `<target>` may be given with a `.emerg.(age|env)`, `.local.emerg.(age|env)`, or
-`.env` suffix (stripped for shell-completion convenience).
 
 #### The `.env` output (`dot` target)
 
