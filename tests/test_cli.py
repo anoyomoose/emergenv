@@ -17,7 +17,7 @@ def test_age_gate_blocks_commands(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli, "age_check", lambda: False)
-    assert main(["status"]) == 1
+    assert main(["status"]) == 255  # operational error, not a graded status code
     assert "age" in capsys.readouterr().err
 
 
@@ -44,13 +44,13 @@ def test_help_bypasses_age_gate(
 def test_no_subcommand_is_an_error() -> None:
     with pytest.raises(SystemExit) as exc:
         main([])
-    assert exc.value.code == 2
+    assert exc.value.code == 254
 
 
 def test_unknown_subcommand_is_an_error() -> None:
     with pytest.raises(SystemExit) as exc:
         main(["frobnicate"])
-    assert exc.value.code == 2
+    assert exc.value.code == 254
 
 
 @requires_age
@@ -62,7 +62,7 @@ def test_errors_go_to_stderr_not_stdout(
     monkeypatch.chdir(tmp_path)  # no emergenv/ -> require_data_dir fails
     code = main(["status"])
     captured = capsys.readouterr()
-    assert code == 1
+    assert code == 255  # operational error, never a graded status code (0-3)
     assert captured.out == ""
     assert captured.err.startswith("error:")
 

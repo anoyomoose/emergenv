@@ -386,7 +386,7 @@ def test_cmd_build_no_source_flag(workdir: SimpleNamespace, run: Run) -> None:
 @pytest.mark.usefixtures("workdir")
 def test_cmd_build_rejects_dot_arg(run: Run) -> None:
     result = run("build", ".")
-    assert result.code == 1
+    assert result.code == 255
     assert "dot" in result.err
 
 
@@ -394,7 +394,7 @@ def test_cmd_build_rejects_dot_arg(run: Run) -> None:
 @pytest.mark.usefixtures("workdir")
 def test_cmd_build_rejects_reserved_target(run: Run) -> None:
     result = run("build", "emergenv")
-    assert result.code == 1
+    assert result.code == 255
     assert "reserved" in result.err
 
 
@@ -404,7 +404,7 @@ def test_cmd_build_rejects_profile_with_slash(
 ) -> None:
     (workdir.root / "my.emerg.env").write_text("A=1\n")
     result = run("build", "my", "--profile", "a/b")
-    assert result.code == 1
+    assert result.code == 255
 
 
 # --- multi-profile & the six-layer search order -----------------------------
@@ -780,7 +780,7 @@ def test_cmd_build_output_bad_path_reports_cleanly(
 ) -> None:
     (workdir.root / "my.emerg.env").write_text("A=1\n")
     result = run("build", "my", "--output", "nope/out.env")  # parent dir missing
-    assert result.code == 1
+    assert result.code == 255
     assert "cannot write" in result.err
     assert "nope/out.env" in result.err
 

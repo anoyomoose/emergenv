@@ -166,7 +166,7 @@ def test_cli_build_expansion_error_exits_nonzero(
 ) -> None:
     (workdir.root / "dot.emerg.env").write_text("$X=${MISSING}\n")
     result = run("build", "dot")
-    assert result.code == 1
+    assert result.code == 255
     assert "MISSING" in result.err
     assert not (workdir.root / ".env").exists()  # nothing written on failure
 

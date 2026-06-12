@@ -39,7 +39,7 @@ def test_encrypt_keep(workdir: SimpleNamespace, run: Run) -> None:
 
 def test_encrypt_missing_env(workdir: SimpleNamespace, run: Run) -> None:
     result = run("encrypt", "database")
-    assert result.code == 1
+    assert result.code == 255
     assert "does not exist" in result.err
 
 
@@ -92,16 +92,16 @@ def test_encrypt_rewrites_when_changed(workdir: SimpleNamespace, run: Run) -> No
 
 
 def test_encrypt_requires_name_or_all(workdir: SimpleNamespace, run: Run) -> None:
-    assert run("encrypt").code == 1
+    assert run("encrypt").code == 255
 
 
 def test_encrypt_rejects_name_and_all(workdir: SimpleNamespace, run: Run) -> None:
-    assert run("encrypt", "database", "--all").code == 1
+    assert run("encrypt", "database", "--all").code == 255
 
 
 def test_encrypt_rejects_escaping_name(workdir: SimpleNamespace, run: Run) -> None:
     result = run("encrypt", "../evil")
-    assert result.code == 1
+    assert result.code == 255
     assert "evil" in result.err
 
 
@@ -109,7 +109,7 @@ def test_encrypt_missing_authorized_keys(workdir: SimpleNamespace, run: Run) -> 
     workdir.write_env("database.env", "FOO=bar\n")
     (workdir.data / "authorized_keys").unlink()
     result = run("encrypt", "database")
-    assert result.code == 1
+    assert result.code == 255
     assert "authorized_keys" in result.err
 
 
@@ -120,7 +120,7 @@ def test_encrypt_refuses_unverifiable_and_keeps_plaintext(
     workdir.write_env("database.env", "FOO=bar\n")
     monkeypatch.setattr(crypto, "decrypt_bytes", lambda _: b"corrupted")
     result = run("encrypt", "database")
-    assert result.code == 1
+    assert result.code == 255
     assert "round-trip" in result.err
     assert not (workdir.data / "database.age").exists()  # nothing written
     assert (workdir.data / "database.env").exists()  # plaintext preserved

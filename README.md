@@ -621,6 +621,22 @@ profile and target subdirectories.
 is reserved as a first path component since it is ambiguous with the stripped
 prefix.
 
+#### Exit codes
+
+Every command exits `0` on success. The two failure codes are deliberately kept
+high so they can never be confused with [`status`](#status)'s graded `0`-`3`
+verdict:
+
+| code | meaning |
+| --- | --- |
+| `0` | success (for `status`: see its graded `0`-`3` table) |
+| `254` | bad command-line usage (unknown command, bad/missing argument) |
+| `255` | operational error (anything that prints `error: ...` to stderr) |
+| `141` | stdout closed early (`SIGPIPE`, e.g. `build ... \| head`) |
+
+`status` is the only command that returns a non-zero code on *success* (`1`-`3`,
+its state verdict); for every other command non-zero means a failure as above.
+
 ### init
 
 Creates `emergenv/`, `emergenv/.gitignore`, and a base
@@ -743,6 +759,12 @@ Every fragment is listed even if some fail to decrypt. The process exit code is 
 highest code shown (so it is `0` only when everything is encrypted-only, great for
 a pre-commit hook). Colours are emitted only to a terminal, and suppressed when
 `NO_COLOR` is set.
+
+These graded `0`-`3` codes are returned **only when `status` actually runs to
+completion**. An operational failure (e.g. a missing `emergenv/`, an undecryptable
+preflight) exits `255` and a malformed command line exits `254` - both well clear of
+`0`-`3` - so a script branching on `status`'s verdict never mistakes an error for a
+state (see [Exit codes](#exit-codes)).
 
 ### clean
 

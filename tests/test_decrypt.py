@@ -18,7 +18,7 @@ def test_decrypt_single(workdir: SimpleNamespace, run: Run) -> None:
 
 def test_decrypt_missing_age(workdir: SimpleNamespace, run: Run) -> None:
     result = run("decrypt", "database")
-    assert result.code == 1
+    assert result.code == 255
     assert "does not exist" in result.err
 
 
@@ -26,7 +26,7 @@ def test_decrypt_refuses_to_overwrite_env(workdir: SimpleNamespace, run: Run) ->
     workdir.write_age("database.age", "FOO=bar\n")
     workdir.write_env("database.env", "FOO=local\n")
     result = run("decrypt", "database")
-    assert result.code == 1
+    assert result.code == 255
     assert "already exists" in result.err
     assert (workdir.data / "database.env").read_text() == "FOO=local\n"  # untouched
 
@@ -52,11 +52,11 @@ def test_decrypt_all_recurses_and_overwrites(
 
 
 def test_decrypt_requires_name_or_all(workdir: SimpleNamespace, run: Run) -> None:
-    assert run("decrypt").code == 1
+    assert run("decrypt").code == 255
 
 
 def test_decrypt_rejects_name_and_all(workdir: SimpleNamespace, run: Run) -> None:
-    assert run("decrypt", "database", "--all").code == 1
+    assert run("decrypt", "database", "--all").code == 255
 
 
 def test_decrypt_with_wrong_key(
@@ -69,5 +69,5 @@ def test_decrypt_with_wrong_key(
     )
     monkeypatch.setenv("EMERGENV_KEY", str(wrong))
     result = run("decrypt", "database")
-    assert result.code == 1
+    assert result.code == 255
     assert "age failed" in result.err

@@ -22,6 +22,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 from . import EmergenvError, __version__, output
 from .crypto import (
@@ -64,6 +65,12 @@ GITIGNORE_CONTENT = (
 
 # Public keys seeded into a fresh authorized_keys, in preference order.
 SSH_PUBLIC_KEYS = ("id_ed25519.pub", "id_rsa.pub")
+
+# Exit codes. These sit above the graded codes that ``status`` returns (0-3) so
+# an error can never be mistaken for a status verdict: a caller scripting around
+# ``emergenv status`` sees 0-3 only when status actually ran to completion.
+EXIT_ERROR = 255  # any operational failure (an EmergenvError reached main)
+EXIT_USAGE = 254  # bad command-line usage (argparse rejected the arguments)
 
 
 def error(message: str) -> None:
@@ -625,8 +632,23 @@ def cmd_pyproject(args: argparse.Namespace) -> int:
     return 0
 
 
+class _ArgumentParser(argparse.ArgumentParser):
+    """An ``ArgumentParser`` that reports usage errors with :data:`EXIT_USAGE`.
+
+    argparse exits ``2`` on a usage error, which would collide with ``status``'s
+    graded exit codes (0-3). We remap only that case; ``--help``/``--version``
+    still exit ``0``. Subparsers inherit this class (``add_subparsers`` defaults
+    ``parser_class`` to ``type(self)``), so their usage errors are remapped too.
+    """
+
+    def exit(self, status: int = 0, message: str | None = None) -> NoReturn:
+        if status == 2:
+            status = EXIT_USAGE
+        super().exit(status, message)
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _ArgumentParser(
         prog="emergenv",
         description="Encrypted, Merged Environment. "
         "A <fragment> is a path under emergenv/ without extension; a leading "
@@ -843,7 +865,7 @@ def main(argv: list[str] | None = None) -> int:
         return exit_code
     except EmergenvError as exc:
         error(str(exc))
-        return 1
+        return EXIT_ERROR
 
 
 if __name__ == "__main__":

@@ -145,7 +145,7 @@ def test_verbose_no_match_still_prints_breakdown(
     """Even when no file matches, the breakdown is printed before the error."""
     (workdir.root / "dot.emerg.env").write_text("@include missing\n")
     result = run("build", "dot", "--verbose")
-    assert result.code == 1
+    assert result.code == 255
     assert "importing: missing" in result.out
     assert "  - missing: missing.(age|env)" in result.out
 

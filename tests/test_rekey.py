@@ -89,7 +89,7 @@ def test_rekey_aborts_on_mismatch_writing_nothing(
     before = clean.read_bytes()
 
     result = run("rekey")
-    assert result.code == 1
+    assert result.code == 255
     assert "b" in result.err
     assert "aborted" in result.err
     assert clean.read_bytes() == before  # pass 1 aborted: nothing was written
@@ -101,7 +101,7 @@ def test_rekey_mismatch_lists_all_offenders(workdir: SimpleNamespace, run: Run) 
         workdir.write_env(name + ".env", "V=2\n")
 
     result = run("rekey")
-    assert result.code == 1
+    assert result.code == 255
     assert "bbb" in result.err and "ccc" in result.err
 
 
@@ -113,7 +113,7 @@ def test_rekey_aborts_on_undecryptable_writing_nothing(
     before = clean.read_bytes()
 
     result = run("rekey")
-    assert result.code == 1
+    assert result.code == 255
     assert clean.read_bytes() == before  # aborted in pass 1, nothing written
 
 
