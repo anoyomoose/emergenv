@@ -13,12 +13,10 @@ if [ "$CI" = "true" ]; then
   set -e
 fi
 
-# Default to the whole source + test tree (this is not a git repo, so we can't
-# use `git ls-files` the way the sibling projects do).
 if [ "$1" != "" ]; then
   FILES="${@}"
 else
-  FILES="src tests"
+  FILES=$(git ls-files | grep '\.py$' | xargs echo)
 fi
 
 if [ "$CI" = "true" ]; then
