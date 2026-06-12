@@ -412,6 +412,7 @@ with no `--profile` simply uses the base fragments.
 `.emerg.env` files are ordinary `.env` files with two extra directives:
 
 - `@include <fragment>` - splice in the entire resolved contents of `<fragment>`
+  (optionally filtered to a whitelist/blacklist of keys, see below)
 - `@<key>=<fragment>` - emit a single line carrying the winning assignment of
   `<key>` (case-sensitive) from the resolved contents of `<fragment>`
 
@@ -466,6 +467,27 @@ ancestors are searched, stopping at a git root boundary.
 ### `@include <fragment>`
 
 The directive line is replaced by the entire merged block for `<fragment>`.
+
+It may be followed by a space-separated key list to splice only part of the
+fragment:
+
+- `@include <fragment> K1 K2` - keep only the lines that assign `K1`/`K2` (a
+  **whitelist**; the fragment's other keys, comments and blanks are dropped).
+- `@include <fragment> !K1 !K2` - keep everything *except* the lines that assign
+  `K1`/`K2` (a **blacklist**, so comments and other keys are preserved).
+
+You cannot mix included and excluded keys in one directive, and a key that matches
+no assignment in the fragment is an error.
+
+Unlike `@<key>=<fragment>`, the whitelist keeps **every** line for a key (all its
+overrides, with `# FROM:` provenance). Evaluation still happens in the assembled
+output, not in the fragment - but because all of a key's lines travel together, a
+self-referential chain survives: `@include f MY_VAR` over `MY_VAR=1` /
+`$MY_VAR=$(( MY_VAR + 1 ))` yields `MY_VAR=2`, because the `MY_VAR=1` line is spliced
+in just above the expression. (`@MY_VAR=f` instead carries only the final expression,
+evaluated where the directive sits against the surrounding build.) So if a kept
+computed line references a key the filter dropped, that key must be defined elsewhere
+in the build or expansion errors.
 
 ### `@<key>=<fragment>`
 

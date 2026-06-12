@@ -111,6 +111,8 @@ class _Stem:
 
 # An assignment: optional leading whitespace, optional ``export ``, then KEY=.
 _ASSIGN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=")
+# Valid environment-variable identifier (bare, no leading ``!``).
+_KEYNAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # Directives (operate on the whole line, after optional leading whitespace).
 _INCLUDE = re.compile(r"^\s*@include\s+(\S.*?)\s*$")
 _KEYREF = re.compile(r"^\s*(export\s+)?@([A-Za-z_][A-Za-z0-9_]*)=(\S.*?)\s*$")
@@ -137,16 +139,58 @@ def _assignment_value(text: str) -> str:
     return text.split("=", 1)[1]
 
 
+def _parse_include_keys(
+    tokens: list[str], name: str
+) -> tuple[str, frozenset[str], tuple[str, ...]] | None:
+    """Classify the key tokens after an ``@include`` fragment name.
+
+    Returns ``None`` (no filter), ``("only", keys, raw)`` (whitelist), or
+    ``("except", keys, raw)`` (blacklist).  Raises on an invalid key token or
+    on a mix of included and excluded keys.
+    """
+    if not tokens:
+        return None
+    pos: list[str] = []
+    neg: list[str] = []
+    for tok in tokens:
+        bare = tok[1:] if tok.startswith("!") else tok
+        if not _KEYNAME.fullmatch(bare):
+            raise EmergenvError(f"@include {name!r}: invalid key {tok!r}")
+        (neg if tok.startswith("!") else pos).append(bare)
+    if pos and neg:
+        raise EmergenvError(f"@include {name!r}: cannot mix included and excluded keys")
+    mode = "only" if pos else "except"
+    return (mode, frozenset(pos or neg), tuple(tokens))
+
+
+def _include_keep(text: str, mode: str, keyset: frozenset[str]) -> bool:
+    """Return whether to keep ``text`` when applying a key filter.
+
+    Whitelist (``"only"``): keep only assignment lines whose key is in *keyset*.
+    Blacklist (``"except"``): drop assignment lines whose key is in *keyset*;
+    keep non-assignment lines (comments, blanks).
+    """
+    key = _assignment_key(text)
+    if mode == "only":
+        return key in keyset
+    # "except": keep non-assignment lines (key is None) and assignments not in set
+    return key not in keyset
+
+
 def _parse_directive(text: str) -> tuple | None:
     """Classify a directive line.
 
-    Returns ``("include", name)``, ``("keyref", exported, key, name)``, or
-    ``None`` if the line is not a directive. Raises :class:`EmergenvError` for a
-    line that looks like a directive but is malformed.
+    Returns ``("include", name, spec)``, ``("keyref", exported, key, name)``,
+    or ``None`` if the line is not a directive. *spec* is ``None`` for a plain
+    ``@include`` or a ``(mode, keyset, raw_keys)`` triple for a filtered
+    include (see :func:`_parse_include_keys`). Raises :class:`EmergenvError`
+    for a line that looks like a directive but is malformed.
     """
     include = _INCLUDE.match(text)
     if include:
-        return ("include", include.group(1).strip())
+        parts = include.group(1).split()
+        name = parts[0]
+        return ("include", name, _parse_include_keys(parts[1:], name))
 
     keyref = _KEYREF.match(text)
     if keyref:
@@ -400,11 +444,41 @@ class _Builder:
                     if key is not None:
                         self._trace.assign(key, line.source, line.text)
             elif directive[0] == "include":
-                if self._trace is not None:
-                    self._trace.enter(f"@include {directive[1]}")
-                out.extend(self._resolve(directive[1]))
-                if self._trace is not None:
-                    self._trace.leave()
+                name = directive[1]
+                spec = directive[2]
+                if spec is None:
+                    if self._trace is not None:
+                        self._trace.enter(f"@include {name}")
+                    out.extend(self._resolve(name))
+                    if self._trace is not None:
+                        self._trace.leave()
+                else:
+                    mode, keyset, raw_keys = spec
+                    if self._trace is None:
+                        resolved = self._resolve(name)
+                    else:
+                        self._trace.enter("@include " + " ".join([name, *raw_keys]))
+                        resolved = self._resolve_silent(name)
+                    present: set[str] = set()
+                    for ln in resolved:
+                        k = _assignment_key(ln.text)
+                        if k is not None:
+                            present.add(k)
+                    missing = sorted(k for k in keyset if k not in present)
+                    if missing:
+                        raise EmergenvError(
+                            f"@include {name!r}: key {missing[0]!r} not found"
+                        )
+                    kept = [
+                        ln for ln in resolved if _include_keep(ln.text, mode, keyset)
+                    ]
+                    if self._trace is not None:
+                        for ln in kept:
+                            k = _assignment_key(ln.text)
+                            if k is not None:
+                                self._trace.assign(k, ln.source, ln.text)
+                        self._trace.leave()
+                    out.extend(kept)
             else:
                 _, exported, ref_key, name = directive
                 assert isinstance(ref_key, str)
@@ -440,6 +514,14 @@ class _Builder:
         saved, self._trace = self._trace, None  # suspend recording during resolve
         try:
             return self._winning_lines(name, key)
+        finally:
+            self._trace = saved
+
+    def _resolve_silent(self, name: str) -> list[Line]:
+        """Resolve a fragment without recording its expansion into the trace."""
+        saved, self._trace = self._trace, None
+        try:
+            return self._resolve(name)
         finally:
             self._trace = saved
 
