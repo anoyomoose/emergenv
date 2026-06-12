@@ -630,6 +630,7 @@ verdict:
 | code | meaning |
 | --- | --- |
 | `0` | success (for `status`: see its graded `0`-`3` table) |
+| `253` | insecure store: a recipient list could be tampered with (see [Security](#security)) |
 | `254` | bad command-line usage (unknown command, bad/missing argument) |
 | `255` | operational error (anything that prints `error: ...` to stderr) |
 | `141` | stdout closed early (`SIGPIPE`, e.g. `build ... \| head`) |
@@ -993,6 +994,39 @@ than silently committed. This is the core reason *emergenv* uses bare `age` inst
 **No shell.** Expansion is pure-Python with no command execution - there is no command
 substitution at all. A value like `pass=$(rm -rf ~)` or `` pass=`whoami` `` is inert
 data, never a command, even on a `$`/`%` computed line.
+
+**Recipient-trust pre-flight.** Before any command that produces ciphertext (`encrypt`,
+`edit`, `rekey`), *emergenv* checks that the recipient lists can't have been tampered
+with by another user. The risk: if someone else can write to an `authorized_keys` file -
+or to any directory on the path to it, which would let them replace the file - they can
+add their own key as a recipient, and your next encryption silently encrypts to them too.
+Verify-on-write would *not* catch this (it round-trips with *your* key, which is still
+there). So for every `authorized_keys` under `emergenv/`, and every directory from `/`
+down to it, *emergenv* requires: not writable by group or others (a directory with the
+sticky bit set, like `/tmp` at `1777`, is fine - sticky stops non-owners replacing
+files), and owned by you or root. If any check fails it aborts with exit `253` and lists
+exactly what to fix (`chmod go-w`, or `chown`). `status` doesn't abort on this - it
+warns and still reports - but it too exits `253` so a script notices. The file's *read*
+bits are ignored: `authorized_keys` is public keys, so `0644` and `0600` are both fine.
+
+> **The group-writable trade-off.** Group-writable only grants access to *members* of
+> that group, so on the common "user private group" setup (each user alone in their own
+> same-named group, what umask `002` implies) it's harmless. For ease of use *emergenv*
+> tries to detect that case - reading `/etc/group` and `/etc/passwd` (both world-readable;
+> no privilege needed) to see whether anyone *else* is in the group - and only flags a
+> group-writable path when another member exists. This is **not 100% reliable**: networked
+> directories (LDAP/SSSD) often don't enumerate via the passwd database, so a remote user
+> whose *primary* group is yours could be missed. When membership can't be determined at
+> all the check is conservative and flags it anyway (the message says so); the only way it
+> errs is toward flagging, never toward silently allowing. If you're the sole member of a
+> group it flags, `chmod g-w` clears it.
+>
+> On **macOS** this optimization is skipped: users and groups live in Directory Services,
+> not `/etc/passwd`/`/etc/group` (which can't be reliably enumerated), and the default
+> primary group `staff` is shared by every local user - so there is no "user private
+> group" and group-writable really does mean shared. macOS therefore always flags a
+> group-writable path; in practice this rarely matters, since macOS's default umask of
+> `022` leaves nothing group-writable to begin with.
 
 **Owner-only plaintext.** The uncommitted plaintext files *emergenv* writes - decrypted
 fragments and built `.env` / `<target>.env` outputs - are created `0600`, with the

@@ -46,6 +46,12 @@ from .paths import (
     validate_component,
 )
 from .pyproject import find_pyproject, load_emergenv_config, plan_builds
+from .security import (
+    InsecureStoreError,
+    check_recipient_trust,
+    describe_trust_violations,
+    recipient_trust_violations,
+)
 
 # Suffixes stripped from a build <target> for shell-completion convenience.
 TARGET_SUFFIXES = (
@@ -71,11 +77,22 @@ SSH_PUBLIC_KEYS = ("id_ed25519.pub", "id_rsa.pub")
 # ``emergenv status`` sees 0-3 only when status actually ran to completion.
 EXIT_ERROR = 255  # any operational failure (an EmergenvError reached main)
 EXIT_USAGE = 254  # bad command-line usage (argparse rejected the arguments)
+EXIT_SECURITY = 253  # insecure store: a recipient list could be tampered with
+
+# Commands that produce ciphertext and therefore must pass the recipient-trust
+# pre-flight before running. (decrypt/build only read recipients indirectly or
+# not at all; status surfaces the same finding as a warning, not an abort.)
+ENCRYPT_COMMANDS = frozenset({"encrypt", "edit", "rekey"})
 
 
 def error(message: str) -> None:
     """Report an error to stderr. Always emitted; never silenced."""
     print(f"error: {message}", file=sys.stderr)
+
+
+def warn(message: str) -> None:
+    """Report a warning to stderr. Always emitted; never silenced."""
+    print(f"warning: {message}", file=sys.stderr)
 
 
 def _collect_ssh_public_keys() -> list[str]:
@@ -438,19 +455,9 @@ def _status_of(pair: dict) -> tuple[int, str, str]:
     return 1, "ENV", "orange"
 
 
-def cmd_status(_args: argparse.Namespace) -> int:
-    """List every fragment with its state; exit code is the worst state seen.
-
-    First, as a pre-flight, it verifies you are a recipient of every
-    ``authorized_keys`` set; if not it reports which and aborts with code 3
-    (you would otherwise only discover the lockout when a write fails).
-
-    Per file: 0 ``AGE`` (encrypted only), 1 ``AGE+ENV MATCH`` / ``ENV``,
-    2 ``AGE+ENV MISMATCH``, 3 ``ERROR`` (undecryptable). Every name is listed
-    even if some fail to decrypt; the return value is the highest code seen.
-    """
-    require_data_dir()
-
+def _status_report() -> int:
+    """The normal status output and graded exit code (recipient pre-flight first,
+    then the per-fragment listing). See :func:`cmd_status`."""
     # Pre-flight: you must be a recipient of every authorized_keys set, or you
     # would be unable to encrypt/edit/rekey files governed by the ones you miss
     # (which only ever fails at write time, per file). Surface it up front.
@@ -474,6 +481,35 @@ def cmd_status(_args: argparse.Namespace) -> int:
         worst = max(worst, code)
         log(f"{pair['name']} {colourize(label, colour)}")
     return worst
+
+
+def cmd_status(_args: argparse.Namespace) -> int:
+    """List every fragment with its state; exit code is the worst state seen.
+
+    First it warns if the store is insecure - any ``authorized_keys`` (or a
+    directory on the path to it) writable by someone other than you or root, so
+    its recipients could be tampered with. Unlike the encrypt commands, ``status``
+    does not abort on this (its own encryption is only a throwaway probe), but the
+    finding *dominates* the exit code: it returns 253 rather than a state verdict.
+
+    Then, as a pre-flight, it verifies you are a recipient of every
+    ``authorized_keys`` set; if not it reports which and aborts with code 3
+    (you would otherwise only discover the lockout when a write fails).
+
+    Per file: 0 ``AGE`` (encrypted only), 1 ``AGE+ENV MATCH`` / ``ENV``,
+    2 ``AGE+ENV MISMATCH``, 3 ``ERROR`` (undecryptable). Every name is listed
+    even if some fail to decrypt; the return value is the highest code seen.
+    """
+    require_data_dir()
+
+    violations = recipient_trust_violations()
+    if violations:
+        warn("insecure store - " + describe_trust_violations(violations))
+
+    code = _status_report()
+    # An insecure store is the most serious finding, so it dominates the exit
+    # code: a script branching on `status` sees 253, never a state verdict.
+    return EXIT_SECURITY if violations else code
 
 
 def cmd_clean(_args: argparse.Namespace) -> int:
@@ -861,8 +897,15 @@ def main(argv: list[str] | None = None) -> int:
                 "runnable, or reports an unsupported version. Install it from "
                 "https://github.com/FiloSottile/age and try again."
             )
+        # Trust pre-flight before any command that produces ciphertext: abort if
+        # a recipient list could have been tampered with by another user.
+        if args.command in ENCRYPT_COMMANDS:
+            check_recipient_trust()
         exit_code: int = args.func(args)
         return exit_code
+    except InsecureStoreError as exc:  # subclass of EmergenvError - catch first
+        error(str(exc))
+        return EXIT_SECURITY
     except EmergenvError as exc:
         error(str(exc))
         return EXIT_ERROR

@@ -9,6 +9,7 @@ the real ``~/.ssh`` is never touched. Each test gets an isolated, chdir'd
 ``tmp_path`` and therefore a disposable ``emergenv/`` data directory.
 """
 
+import os
 import shutil
 import signal
 import subprocess
@@ -32,10 +33,18 @@ requires_age = pytest.mark.skipif(
 @pytest.fixture(autouse=True)
 def _reset_process_state() -> Iterator[None]:
     """Isolate tests from process-global state that the CLI mutates: the output
-    routing knobs (cmd_build) and the SIGPIPE disposition (main)."""
+    routing knobs (cmd_build) and the SIGPIPE disposition (main).
+
+    Also pin the umask to 022 so directories created during a test (the data dir
+    and any subdirs) are not group-writable on machines whose umask is 002 -
+    otherwise the recipient-trust pre-flight would (correctly) flag them and skew
+    unrelated tests. Tests that exercise the check set explicit modes themselves.
+    """
     saved = (output.log_mode, output.age_mode)
     sigpipe = signal.getsignal(signal.SIGPIPE) if hasattr(signal, "SIGPIPE") else None
+    old_umask = os.umask(0o022)
     yield
+    os.umask(old_umask)
     output.log_mode, output.age_mode = saved
     if sigpipe is not None:
         signal.signal(signal.SIGPIPE, sigpipe)
