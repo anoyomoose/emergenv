@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from conftest import Run, requires_age
 
-from emergenv import cli
+from emergenv import __version__, cli
 from emergenv.cli import main
 
 
@@ -28,7 +28,7 @@ def test_version_bypasses_age_gate(
     with pytest.raises(SystemExit) as exc:
         main(["--version"])
     assert exc.value.code == 0
-    assert "1.0.0" in capsys.readouterr().out
+    assert __version__ in capsys.readouterr().out
 
 
 def test_help_bypasses_age_gate(
