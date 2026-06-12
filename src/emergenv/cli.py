@@ -127,6 +127,33 @@ def _write_encrypted(plaintext: bytes, age: Path) -> bool:
     return True
 
 
+def _decrypt_all() -> None:
+    """Decrypt every ``.age`` file to its sibling ``.env``, overwriting it."""
+    targets = [pair["age"] for pair in iter_pairs() if pair["age"]]
+    if not targets:
+        log("no .age files to decrypt")
+    for age in targets:
+        env = _env_for_age(age)
+        log(f"decrypting {age} -> {env}")
+        env.write_bytes(decrypt_bytes(age.read_bytes()))
+
+
+def _encrypt_all(keep: bool) -> None:
+    """Encrypt every ``.env`` file to its sibling ``.age`` (unchanged skipped)."""
+    targets = [pair["env"] for pair in iter_pairs() if pair["env"]]
+    if not targets:
+        log("no .env files to encrypt")
+    for env in targets:
+        age = _age_for_env(env)
+        if _write_encrypted(env.read_bytes(), age):
+            log(f"encrypted {env} -> {age}")
+        else:
+            log(f"{age} unchanged")
+        if not keep:
+            env.unlink()
+            log(f"removed {env}")
+
+
 def _require_target(all_flag: bool, name: str | None) -> None:
     """Validate the mutually exclusive ``<fragment>`` / ``--all`` selection."""
     if all_flag and name:
@@ -180,9 +207,38 @@ def cmd_init(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _edit_all() -> int:
+    """Decrypt every fragment, wait for ENTER, then re-encrypt every fragment.
+
+    Refuses unless ``status`` is all-green (only encrypted files exist). That
+    gate is doing double duty: status's recipient pre-flight also guarantees you
+    can decrypt every fragment now and re-encrypt it afterwards, and all-green
+    means there is no stray ``.env`` to clobber. Only the fragments you actually
+    change get a new ``.age`` (unchanged ones are skipped). Do not touch the
+    ``.age`` files or run ``git`` while editing. If re-encryption fails partway
+    your edits survive as ``.env`` files; fix the cause and run ``encrypt --all``
+    and/or ``clean``.
+    """
+    if cmd_status(argparse.Namespace()) != 0:
+        raise EmergenvError(
+            "edit --all requires an all-green status (only encrypted files "
+            "exist); resolve the issues listed above, then retry"
+        )
+    log("")
+    _decrypt_all()
+    input("\nedit the decrypted .env files now, then press ENTER to re-encrypt...")
+    print()
+    _encrypt_all(keep=False)
+    return 0
+
+
 def cmd_edit(args: argparse.Namespace) -> int:
     """Decrypt a fragment, open it in an editor, then re-encrypt it."""
     require_data_dir()
+    _require_target(args.all, args.name)
+    if args.all:
+        return _edit_all()
+
     base = resolve_name(args.name)
     age, env = age_file(base), env_file(base)
 
@@ -219,13 +275,7 @@ def cmd_decrypt(args: argparse.Namespace) -> int:
     _require_target(args.all, args.name)
 
     if args.all:
-        targets = [pair["age"] for pair in iter_pairs() if pair["age"]]
-        if not targets:
-            log("no .age files to decrypt")
-        for age in targets:
-            env = _env_for_age(age)
-            log(f"decrypting {age} -> {env}")
-            env.write_bytes(decrypt_bytes(age.read_bytes()))
+        _decrypt_all()
         return 0
 
     base = resolve_name(args.name)
@@ -245,18 +295,7 @@ def cmd_encrypt(args: argparse.Namespace) -> int:
     _require_target(args.all, args.name)
 
     if args.all:
-        targets = [pair["env"] for pair in iter_pairs() if pair["env"]]
-        if not targets:
-            log("no .env files to encrypt")
-        for env in targets:
-            age = _age_for_env(env)
-            if _write_encrypted(env.read_bytes(), age):
-                log(f"encrypted {env} -> {age}")
-            else:
-                log(f"{age} unchanged")
-            if not args.keep:
-                env.unlink()
-                log(f"removed {env}")
+        _encrypt_all(args.keep)
         return 0
 
     base = resolve_name(args.name)
@@ -507,7 +546,16 @@ def build_parser() -> argparse.ArgumentParser:
         "edit", help="decrypt a fragment, open it in an editor, then re-encrypt it"
     )
     p_edit.add_argument(
-        "name", metavar="<fragment>", help="fragment to edit (its .age must exist)"
+        "name",
+        metavar="<fragment>",
+        nargs="?",
+        help="fragment to edit (its .age must exist)",
+    )
+    p_edit.add_argument(
+        "--all",
+        action="store_true",
+        help="edit every fragment: decrypt all, wait for ENTER, re-encrypt all "
+        "(requires an all-green status)",
     )
     p_edit.add_argument(
         "--wait",

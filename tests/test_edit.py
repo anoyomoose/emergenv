@@ -97,6 +97,72 @@ def test_edit_no_rewrite_when_unchanged(
     assert not (workdir.data / "database.env").exists()
 
 
+def test_edit_all_reencrypts_all_edits(
+    workdir: SimpleNamespace, run: Run, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    a = workdir.write_age("database.age", "OLD=1\n")
+    b = workdir.write_age("cache.age", "OLD=2\n")
+
+    def fake_input(prompt: str = "") -> str:
+        (workdir.data / "database.env").write_text("NEW=1\n")
+        (workdir.data / "cache.env").write_text("NEW=2\n")
+        return ""
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    result = run("edit", "--all")
+    assert result.code == 0
+    assert not (workdir.data / "database.env").exists()
+    assert not (workdir.data / "cache.env").exists()
+    assert crypto.decrypt_bytes(a.read_bytes()) == b"NEW=1\n"
+    assert crypto.decrypt_bytes(b.read_bytes()) == b"NEW=2\n"
+
+
+def test_edit_all_refuses_when_not_all_green(
+    workdir: SimpleNamespace, run: Run, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workdir.write_age("database.age", "OLD=1\n")
+    stray = workdir.write_env("cache.env", "LOCAL=1\n")  # .env-only: not green
+    called: list[bool] = []
+
+    def fake_input(prompt: str = "") -> str:
+        called.append(True)
+        return ""
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    result = run("edit", "--all")
+    assert result.code == 1
+    assert "all-green" in result.err
+    assert not called  # never reached the decrypt/wait stage
+    assert stray.read_text() == "LOCAL=1\n"  # left untouched
+
+
+def test_edit_all_and_fragment_is_an_error(workdir: SimpleNamespace, run: Run) -> None:
+    workdir.write_age("database.age", "OLD=1\n")
+    result = run("edit", "database", "--all")
+    assert result.code == 1
+    assert "not both" in result.err
+
+
+def test_edit_requires_a_selection(workdir: SimpleNamespace, run: Run) -> None:
+    result = run("edit")
+    assert result.code == 1
+    assert "give a <fragment>" in result.err
+
+
+def test_edit_all_unchanged_is_not_rewritten(
+    workdir: SimpleNamespace, run: Run, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    age = workdir.write_age("database.age", "FOO=bar\n")
+    before = age.read_bytes()
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")  # no edits made
+
+    result = run("edit", "--all")
+    assert result.code == 0
+    assert age.read_bytes() == before  # not rewritten
+    assert "unchanged" in result.out
+    assert not (workdir.data / "database.env").exists()
+
+
 def test_edit_preserves_plaintext_on_encrypt_failure(
     workdir: SimpleNamespace, run: Run, monkeypatch: pytest.MonkeyPatch
 ) -> None:

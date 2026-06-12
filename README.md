@@ -622,7 +622,7 @@ Creates `emergenv/`, `emergenv/.gitignore`, and a base
 `emergenv/authorized_keys` (containing the public keys from `id_ed25519.pub` and
 `id_rsa.pub` in `~/.ssh` if either is present, otherwise empty)
 
-### edit `<fragment>` [--wait]
+### edit [`<fragment>`|--all] [--wait]
 
 Decrypts `<fragment>.age` to `<fragment>.env`, opens it with `$VISUAL`, `$EDITOR`, 
 `/usr/bin/editor`, or `vi`, and re-encrypts it after the editor closes.
@@ -630,11 +630,20 @@ Decrypts `<fragment>.age` to `<fragment>.env`, opens it with `$VISUAL`, `$EDITOR
 If `<fragment>.age` doesn't exist, or `<fragment>.env` already exists, *emergenv* aborts with
 an error.
 
-If no editor can be executed or `--wait` is passed, instead it waits for the user to 
-press ENTER between decrypting and re-encrypting, allowing the user to edit the file
-in for example their IDE.
+If no editor can be executed or `--wait` is passed, instead it waits for 
+the user to press ENTER between decrypting and re-encrypting, allowing the user to edit the
+file(s) in for example their IDE.
 
-The decrypted file is removed after having been re-encrypted.
+If `--all` is passed instead of a `<fragment>`, *all* files are decrypted, it waits for the
+user to press ENTER, then *all* files are re-encrypted. `--all` will refuse to work unless
+`status` returns an all-green result (only encrypted files exist). One should not modify
+the `.age` files or use any `git` commands during this procedure. (Essentially this is
+short-hand for `status || exit; decrypt --all; wait; encrypt --all;`).
+On failure your edits survive as `.env` files; fix the cause and use `encrypt --all` and/or
+`clean`.
+
+The decrypted file(s) are removed after having been re-encrypted, for both `<fragment>` and
+`--all` variants.
 
 ### decrypt [`<fragment>`|--all]
 
@@ -977,7 +986,3 @@ data, never a command, even on a `$`/`%` computed line.
   key, **or a person who has left** - **rotate the secrets themselves** (`edit` + commit),
   not just the recipient set. Re-keying changes who can read new commits; only a new
   secret *value* invalidates what the old key already saw.
-
-
-TODO: edit --all
-TODO: pyproject.toml
