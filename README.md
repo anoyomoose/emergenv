@@ -39,6 +39,7 @@ need it. See [Simplest possible use](#simplest-possible-use-just-encrypt-one-fil
 - [Command reference](#command-reference)
 - [Recipes](#recipes)
 - [Security](#security)
+- [pyproject.toml integration](#pyprojecttoml-integration)
 
 ## Why emergenv?
 
@@ -312,7 +313,7 @@ file instead, e.g.:
 ### Simplest possible use: just encrypt one file
 
 If all you want is "encrypt my `.env` and regenerate it later", you need no profiles,
-includes, or computed values at all:
+includes, or computed values at all (assuming you have already installed and used `init`):
 
 ```shell
 mv whatever.env emergenv/whatever.emerg.env   # move it into the store
@@ -986,3 +987,132 @@ data, never a command, even on a `$`/`%` computed line.
   key, **or a person who has left** - **rotate the secrets themselves** (`edit` + commit),
   not just the recipient set. Re-keying changes who can read new commits; only a new
   secret *value* invalidates what the old key already saw.
+
+## pyproject.toml integration
+
+If you build several targets on every deploy, you can declare them once in
+`pyproject.toml` and run the whole chain with a single command:
+
+```shell
+emergenv pyproject --profile production
+```
+
+instead of maintaining a script of `emergenv build …` lines. The committed
+`pyproject.toml` owns the **static structure** - which target builds to which
+output, and the output *format*. The command line owns the **per-deploy axis**
+(`--profile`) and build selection (`--group`).
+
+> Requires **Python 3.11+** (it uses the standard-library `tomllib`). On older Python, run `emergenv build` per target.
+
+### Defining builds
+
+```toml
+[tool.emergenv]
+# Defaults inherited by every build below; each build can override them.
+bare = true
+local = false                 # = --no-local on every build
+
+[[tool.emergenv.builds]]
+target = "env1"               # -> env1.env
+
+[[tool.emergenv.builds]]
+target = "env2"
+output = "envs/bla.env"       # override the default output path
+
+[[tool.emergenv.builds]]
+target = "metrics"
+group = "observability"
+profile_post = ["eu"]         # always layer 'eu' on top of the CLI profile
+
+[[tool.emergenv.builds]]
+target = "fixture"
+profile = ["test"]            # forced profile; ignores --profile
+```
+
+`[[tool.emergenv.builds]]` is an array, so builds run **in file order**, and the
+same target may appear more than once (e.g. one `dot` per environment).
+
+`emergenv pyproject --profile production` then runs, in order:
+
+```text
+emergenv build env1    --profile production --bare --no-local
+emergenv build env2    --profile production --bare --no-local --output envs/bla.env
+emergenv build metrics --profile production,eu --bare --no-local
+emergenv build fixture --profile test --bare --no-local
+```
+
+It is a thin wrapper: it resolves the config into `emergenv build` commands and
+shells out to each (logging every command), rather than reimplementing the build.
+
+### Keys
+
+| Key | Type | Where | Effect |
+| --- | --- | --- | --- |
+| `target` | string | build only | the build target (required) |
+| `output` | string | build only | output path (default `.env` / `<target>.env`) |
+| `group` | string \| list | build only | tag for `--group` selection |
+| `bare` | bool | global + build | `--bare` when `true` |
+| `local` | bool | global + build | `--no-local` when **`false`** |
+| `source` | bool | global + build | `--no-source` when **`false`** |
+| `filter` | bool | global + build | `--no-filter` when **`false`** |
+| `verbose` | bool | global + build | `--verbose` when `true` |
+| `trace` | string \| list | global + build | `--trace x,y`, or `--trace-all` if `"*"` |
+| `profile` | string \| list | global + build | **forces** the profile list |
+| `profile_pre` | string \| list | global + build | profiles prepended to `--profile` |
+| `profile_post` | string \| list | global + build | profiles appended to `--profile` |
+
+The boolean flags are **inverted** from the CLI on purpose: a config file reads
+better as positive state, so `local = false` produces `--no-local`. Any of
+`group`/`profile`/`profile_pre`/`profile_post`/`trace` may be written as a single
+string or a list (`"a,b"`, `["a","b"]`, and CLI `--profile a,b` are equivalent).
+
+### Profiles: the one rule worth knowing
+
+The profile for each build resolves as **`profile_pre` + `--profile` (CLI) +
+`profile_post`** - *unless* a plain `profile` is set, which **forces** that list
+and ignores `--profile` entirely. So:
+
+- Use `profile` for a build that must never vary (a test fixture).
+- Use `profile_pre` / `profile_post` (and leave `profile` unset) when you want the
+  deploy's `--profile` to participate, wrapped by fixed overlays.
+
+### Overriding format from the command line
+
+The format/diagnostic booleans can be overridden for a whole run with paired
+flags - `--bare`/`--no-bare`, `--local`/`--no-local`, `--source`/`--no-source`,
+`--filter`/`--no-filter`, `--verbose`/`--no-verbose`. Each is **tri-state**:
+
+- omitted ⇒ use whatever the TOML resolves to (the normal case),
+- given ⇒ force that value for **every** build, beating the TOML.
+
+So even though the committed config sets `bare = true`, a local run can ask for
+the commented, annotated output:
+
+```shell
+emergenv pyproject --profile staging --no-bare --local
+```
+
+`--output` is deliberately not offered (it can't apply across multiple builds);
+output stays per-build in the TOML. `--trace`/`--trace-all`, if given, replaces
+the TOML `trace` for every build.
+
+### Selecting a subset
+
+`--group` runs only the builds tagged with a matching `group` (repeatable and
+comma-separated, like `--profile`); with no `--group`, every build runs.
+
+```shell
+emergenv pyproject --profile production --group observability   # only 'metrics'
+```
+
+### Preview
+
+`--dry-run` prints the exact command list without running anything - ideal for
+confirming what a deploy will do before it touches your env files:
+
+```shell
+emergenv pyproject --profile production --dry-run
+```
+
+Builds run sequentially and stop on the first failure; like `rekey`, this is not
+atomic - a failure partway leaves the already-built outputs in place.

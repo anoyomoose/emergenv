@@ -44,6 +44,7 @@ from .paths import (
     resolve_name,
     validate_component,
 )
+from .pyproject import find_pyproject, load_emergenv_config, plan_builds
 
 # Suffixes stripped from a build <target> for shell-completion convenience.
 TARGET_SUFFIXES = (
@@ -171,19 +172,41 @@ def _normalize_target(arg: str) -> str:
     return target
 
 
-def _parse_profiles(specs: list[str] | None) -> list[str]:
-    """Flatten and validate ``--profile`` values (repeated and/or comma-separated)."""
-    profiles = []
+def _parse_components(specs: list[str] | None, *, kind: str) -> list[str]:
+    """Flatten and validate repeated, comma-separated CLI values (``--profile``/``--group``)."""
+    items = []
     for spec in specs or []:
         for raw in spec.split(","):
-            profile = raw.strip()
-            if not profile:
+            item = raw.strip()
+            if not item:
                 continue
-            if "/" in profile:
-                raise EmergenvError(f"a profile must not contain '/': {profile!r}")
-            validate_component(profile, kind="profile")
-            profiles.append(profile)
-    return profiles
+            if "/" in item:
+                raise EmergenvError(f"a {kind} must not contain '/': {item!r}")
+            validate_component(item, kind=kind)
+            items.append(item)
+    return items
+
+
+def _parse_profiles(specs: list[str] | None) -> list[str]:
+    """Flatten and validate ``--profile`` values (repeated and/or comma-separated)."""
+    return _parse_components(specs, kind="profile")
+
+
+def _trace_override(args: argparse.Namespace) -> str | list[str] | None:
+    """The trace value from ``--trace``/``--trace-all`` for the pyproject runner."""
+    if args.trace_all:
+        return "*"
+    if not args.trace:
+        return None
+    variables: list[str] = []
+    for spec in args.trace:
+        for raw in spec.split(","):
+            item = raw.strip()
+            if item == "*":
+                return "*"
+            if item:
+                variables.append(item)
+    return variables or None
 
 
 def cmd_init(_args: argparse.Namespace) -> int:
@@ -522,6 +545,59 @@ def cmd_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pyproject(args: argparse.Namespace) -> int:
+    """Run the build chain declared in ``pyproject.toml``'s ``[tool.emergenv]``.
+
+    Resolves the config into a list of ``emergenv build`` commands and shells out
+    to each (from the pyproject's directory), stopping on the first failure.
+    ``--dry-run`` prints the commands without running them.
+    """
+    try:
+        import tomllib  # noqa: F401  - Python 3.11+; presence is the gate
+    except ModuleNotFoundError:
+        raise EmergenvError(
+            "the 'pyproject' command requires Python 3.11+ (for the standard-"
+            "library tomllib parser). Run 'emergenv build' per target instead."
+        )
+
+    pyproject = find_pyproject(Path.cwd())
+    config = load_emergenv_config(pyproject)
+
+    overrides = {
+        "bare": args.bare,
+        "local": args.local,
+        "source": args.source,
+        "filter": args.filter,
+        "verbose": args.verbose,
+        "trace": _trace_override(args),
+    }
+    commands = plan_builds(
+        config,
+        _parse_profiles(args.profile),
+        _parse_components(args.group, kind="group"),
+        overrides,
+    )
+
+    if shutil.which("emergenv") is None:
+        raise EmergenvError(
+            "emergenv not found on PATH - the pyproject runner shells out to "
+            "'emergenv build'"
+        )
+
+    project_dir = str(pyproject.parent)
+    log(f"pyproject: {pyproject}")
+    for argv in commands:
+        log("→ " + shlex.join(argv))
+        if args.dry_run:
+            continue
+        result = subprocess.run(argv, cwd=project_dir)
+        if result.returncode != 0:
+            raise EmergenvError(
+                f"build failed (exit {result.returncode}): {shlex.join(argv)}"
+            )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="emergenv",
@@ -668,6 +744,51 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_build.set_defaults(func=cmd_build)
 
+    p_pyproject = subparsers.add_parser(
+        "pyproject",
+        help="run the build chain declared in pyproject.toml ([tool.emergenv])",
+    )
+    p_pyproject.add_argument(
+        "--profile",
+        action="append",
+        help="comma-separated profiles, applied in order (the per-deploy axis)",
+    )
+    p_pyproject.add_argument(
+        "--group",
+        action="append",
+        help="only run builds tagged with these group(s); comma-separated",
+    )
+    for _name, _desc in (
+        ("bare", "strip comments and blank lines"),
+        ("local", "apply the <target>.local.emerg.env override"),
+        ("source", "emit '# FROM:' provenance"),
+        ("filter", "apply @filter directives"),
+        ("verbose", "show every search path tried"),
+    ):
+        p_pyproject.add_argument(
+            f"--{_name}",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help=f"override every build's format: {_desc}",
+        )
+    p_pyproject.add_argument(
+        "--trace",
+        metavar="<vars>",
+        action="append",
+        help="trace these variables across every build (replaces the TOML trace)",
+    )
+    p_pyproject.add_argument(
+        "--trace-all",
+        action="store_true",
+        help="trace every variable (same as --trace '*')",
+    )
+    p_pyproject.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the resolved commands without running them",
+    )
+    p_pyproject.set_defaults(func=cmd_pyproject)
+
     return parser
 
 
@@ -682,9 +803,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     # parse_args above handles --help/--version (they exit here), so the age
-    # check only gates the actual subcommands.
+    # check only gates the actual subcommands. The pyproject runner is exempt:
+    # it only shells out to `emergenv build`, which checks age itself.
     try:
-        if not age_check():
+        if args.command != "pyproject" and not age_check():
             raise EmergenvError(
                 "the 'age' binary (>= 1.0.0) was not found on your PATH, is not "
                 "runnable, or reports an unsupported version. Install it from "
