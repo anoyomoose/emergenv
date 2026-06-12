@@ -6,7 +6,6 @@ the real ``~/.ssh`` is never read.
 """
 
 import argparse
-import stat
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -40,12 +39,6 @@ def test_init_creates_scaffold(init_env: SimpleNamespace) -> None:
 def test_init_gitignore_excludes_env(init_env: SimpleNamespace) -> None:
     _init()
     assert "*.env" in (init_env.root / "emergenv" / ".gitignore").read_text()
-
-
-def test_init_authorized_keys_is_0600(init_env: SimpleNamespace) -> None:
-    _init()
-    mode = (init_env.root / "emergenv" / "authorized_keys").stat().st_mode
-    assert stat.S_IMODE(mode) == 0o600
 
 
 def test_init_seeds_both_ssh_keys(init_env: SimpleNamespace) -> None:

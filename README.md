@@ -972,11 +972,26 @@ than silently committed. This is the core reason *emergenv* uses bare `age` inst
 substitution at all. A value like `pass=$(rm -rf ~)` or `` pass=`whoami` `` is inert
 data, never a command, even on a `$`/`%` computed line.
 
+**Owner-only plaintext.** The uncommitted plaintext files *emergenv* writes - decrypted
+fragments and built `.env` / `<target>.env` outputs - are created `0600`, with the
+permissions tightened *before* any secret bytes are written, so a freshly decrypted or
+built file is never briefly group- or world-readable (and overwriting one that happened
+to be looser tightens it first). This is deliberately limited to the plaintext secrets.
+Committed artefacts (the `.age` ciphertext, `authorized_keys`, `.gitignore`) and the
+`emergenv/` directory are left at standard permissions on purpose: git records no file
+mode beyond the executable bit, so a checkout resets them to the umask default regardless
+- restricting them would only create a false sense of security.
+
 **What's *not* protected - and is your responsibility:**
 
 - **The built output is plaintext.** `.env` / `<target>.env` on disk holds real secrets.
-  Keep it out of git (it already should be) and restrict its file permissions; on a
-  server, only the deploying user and the service that reads it need access.
+  *emergenv* writes it `0600`, but where it goes from there is yours: keep it out of git
+  (it already should be), and mind copies, backups, and the access of the service that
+  reads it - on a server, only the deploying user and that service need it.
+- **Directory and committed-file permissions are the OS's, not ours.** If you want
+  `emergenv/` itself locked down on a box (so other local users can't even list fragment
+  names), set it yourself - e.g. `chmod 700 emergenv/` once on the server; a checkout
+  won't undo it on an existing directory.
 - **Recipients see everything they're a recipient of.** Access is per-directory
   (`authorized_keys` granularity), not per-value - there's no way to hand someone a
   single key out of a fragment they can otherwise decrypt.

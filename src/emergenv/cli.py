@@ -114,6 +114,29 @@ def _age_for_env(env_path: Path) -> Path:
     return age_file(env_path.with_name(env_path.name[: -len(ENV_SUFFIX)]))
 
 
+def _write_private(path: Path, data: bytes) -> None:
+    """Write ``data`` to ``path`` as an owner-only (0o600) plaintext file.
+
+    Used only for the plaintext ``.env`` files emergenv produces (decrypted
+    fragments and built outputs), which hold real secrets and are *not* committed.
+    A plain ``write_bytes`` would create the file under the process umask (usually
+    world- or group-readable); instead we open with mode 0o600 and ``fchmod`` the
+    descriptor to 0o600 *before* writing the bytes - so a freshly created file is
+    private from the outset, and overwriting a pre-existing looser file tightens
+    it before any secret content lands in it.
+
+    Committed artefacts (``.age`` ciphertext, ``authorized_keys``, ``.gitignore``)
+    and the data directory are deliberately left at standard permissions: git
+    does not record file modes beyond the executable bit, so it would reset them
+    to the umask default on the next checkout anyway - restricting them here would
+    only create a false sense of security.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        handle.write(data)
+
+
 def _write_encrypted(plaintext: bytes, age: Path) -> bool:
     """Encrypt ``plaintext`` to ``age``, skipping the write if it is unchanged.
 
@@ -136,7 +159,7 @@ def _decrypt_all() -> None:
     for age in targets:
         env = _env_for_age(age)
         log(f"decrypting {age} -> {env}")
-        env.write_bytes(decrypt_bytes(age.read_bytes()))
+        _write_private(env, decrypt_bytes(age.read_bytes()))
 
 
 def _encrypt_all(keep: bool) -> None:
@@ -217,13 +240,17 @@ def cmd_init(_args: argparse.Namespace) -> int:
     except FileExistsError:
         raise EmergenvError(f"'{base}/' already exists")
 
+    # The directory and the files below are committed (or, for the directory,
+    # recreated by a checkout). git records no permissions beyond the executable
+    # bit, so it resets these to the umask default anyway - we leave them standard
+    # rather than pretend to protect them. Only the uncommitted plaintext .env
+    # files emergenv writes get owner-only permissions (see _write_private).
     gitignore = base / ".gitignore"
     gitignore.write_text(GITIGNORE_CONTENT, encoding="utf-8")
 
     authorized_keys = base / "authorized_keys"
     keys = _collect_ssh_public_keys()
     authorized_keys.write_text("".join(f"{key}\n" for key in keys), encoding="utf-8")
-    authorized_keys.chmod(0o600)
 
     key_note = f"{len(keys)} SSH public key(s)" if keys else "no SSH public keys found"
     log(f"initialised {base}/ (.gitignore, authorized_keys with {key_note})")
@@ -271,7 +298,7 @@ def cmd_edit(args: argparse.Namespace) -> int:
         raise EmergenvError(f"{env} already exists")
 
     log(f"decrypting {age} -> {env}")
-    env.write_bytes(decrypt_bytes(age.read_bytes()))
+    _write_private(env, decrypt_bytes(age.read_bytes()))
 
     editor = None if args.wait else _resolve_editor()
     if editor is None:
@@ -308,7 +335,7 @@ def cmd_decrypt(args: argparse.Namespace) -> int:
     if env.exists():
         raise EmergenvError(f"{env} already exists")
     log(f"decrypting {age} -> {env}")
-    env.write_bytes(decrypt_bytes(age.read_bytes()))
+    _write_private(env, decrypt_bytes(age.read_bytes()))
     return 0
 
 
@@ -535,7 +562,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         out = Path(".env") if target == "dot" else Path(f"{target}.env")
     log(f"writing: {out.resolve()}")
     try:
-        out.write_text(text, encoding="utf-8")
+        _write_private(out, text.encode("utf-8"))
     except OSError as exc:
         raise EmergenvError(f"cannot write {out}: {exc.strerror or exc}")
 
