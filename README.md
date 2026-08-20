@@ -86,6 +86,37 @@ We accept those costs because `sops` is unreliable for `.env` files (specificall
 bugs can leave the encrypted text not matching the original plaintext - worse than unusable,
 it's downright dangerous. *emergenv*'s verify-on-write (above) is the direct response.
 
+Are you likely to encounter these issues with `sops`? That wholly depends on your use-case,
+we run into them all the time, that doesn't mean you would.
+
+### Why not emergenv?
+
+If you use multi-line variables.
+
+*emergenv* has its own failure class that is closely related to the `sops` problems:
+where `sops` is leaf-based (which does not fit the `.env` structure and may unexpectedly drop leaves), 
+*emergenv* is line-based and **explicitly does not support multi-line variables**.
+
+For *emergenv* (unless a key is marked for parsing with `$` or `%`) the value of the key is opaque. 
+It does not attempt to parse or otherwise interpret its contents, it's just a blob. Quotes, slashes,
+special characters, they are treated verbatim. This prevents a whole class of potential bugs and
+unexpected behavior. This is a feature, not a bug.
+
+The problem there is that *emergenv* does not understand multi-line variables or continuations. And
+how could it? Shells, docker-compose, systemd, ..., they all disagree how these work. To support
+multi-line variables, *emergenv* would have to *define* the grammar, which may be incompatible with
+whatever tool you use that consumes the `.env` files - and many don't support multi-line in the
+first place.
+
+It mostly works fine for simple operations (such as whole-file encryption and a simple `@include`),
+providing the multi-line value does not contain empty lines, lines that look like comments, or lines
+that include `=` - PEM blocks violate this! Overriding, substitutions, filtering, all of those will
+fail in interesting ways.
+
+*If* multi-line values work for your setup, that is incidental. If you *must* use them, be sure to
+test your actual values and production output. But the bottom line is that they are *not* supported
+and you *should not* use them.
+
 ## License
 
 Released under the MIT license
